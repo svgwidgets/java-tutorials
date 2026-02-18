@@ -1,35 +1,30 @@
 <template>
   <!--
-    Pipe Drawing Modes — Interactive Prototype
-    ===========================================
-    Drop into your project: src/demo/PipeDrawingLab.vue
+    Pipe Drawing Lab — Uses Your Real Library Components
+    =====================================================
+    Drop into: src/demo/PipeDrawingLab.vue
     
-    Three modes to compare:
-    1. AUTO — Click port A, click port B, system generates orthogonal route
-    2. CLICK — Click port A, click canvas to place waypoints, click port B to finish
-    3. ORTHO — Like CLICK but constrained to horizontal/vertical segments only
+    Imports your actual ManualValve, CentrifugalPump, VerticalTank,
+    PressureSensor, and ConnectionPipe. Zero changes to library needed.
     
-    This is a sandbox to find the right UX before building it into the real editor.
+    The editor adds ONLY interaction overlays on top:
+      - Invisible port hit-targets (larger click area)
+      - Waypoint drag handles
+      - Preview rubber-band line
   -->
   <div class="lab">
     <header class="lab-header">
       <span class="lab-title">⬡ Pipe Drawing Lab</span>
       <span class="lab-sep" />
-      <span class="lab-subtitle">Compare drawing modes — find what feels right</span>
+      <span class="lab-sub">Real library components · Three drawing modes</span>
     </header>
 
     <div class="lab-body">
-      <!-- ── Controls ── -->
       <aside class="controls">
         <div class="ctrl-section">
           <div class="ctrl-heading">Drawing Mode</div>
-          <button
-            v-for="m in modes"
-            :key="m.id"
-            class="mode-btn"
-            :class="{ active: drawingMode === m.id }"
-            @click="drawingMode = m.id; cancelDrawing()"
-          >
+          <button v-for="m in modes" :key="m.id" class="mode-btn" :class="{ active: drawingMode === m.id }"
+            @click="drawingMode = m.id; cancelDrawing()">
             <span class="mode-icon">{{ m.icon }}</span>
             <div class="mode-info">
               <span class="mode-name">{{ m.name }}</span>
@@ -37,212 +32,145 @@
             </div>
           </button>
         </div>
-
         <div class="ctrl-section">
           <div class="ctrl-heading">Options</div>
-          <label class="ctrl-toggle">
-            <input type="checkbox" v-model="snapToGrid" />
-            <span>Snap to grid ({{ gridSize }}px)</span>
-          </label>
-          <label class="ctrl-toggle">
-            <input type="checkbox" v-model="showPorts" />
-            <span>Show port dots</span>
-          </label>
-          <label class="ctrl-toggle">
-            <input type="checkbox" v-model="showGuides" />
-            <span>Show alignment guides</span>
-          </label>
+          <label class="ctrl-toggle"><input type="checkbox" v-model="snapToGrid" /><span>Snap to grid</span></label>
+          <label class="ctrl-toggle"><input type="checkbox" v-model="showPortDots" /><span>Show ports (PortIndicator)</span></label>
+          <label class="ctrl-toggle"><input type="checkbox" v-model="showGuides" /><span>Alignment guides</span></label>
         </div>
-
         <div class="ctrl-section">
           <div class="ctrl-heading">Instructions</div>
           <div class="instructions" v-html="currentInstructions" />
         </div>
-
         <div class="ctrl-section">
           <div class="ctrl-heading">Connections ({{ connections.length }})</div>
-          <div
-            v-for="conn in connections"
-            :key="conn.id"
-            class="conn-item"
-            :class="{ selected: selectedConnId === conn.id }"
-            @click="selectedConnId = conn.id"
-          >
-            <span class="conn-label">{{ conn.from.nodeId }}:{{ conn.from.portId }}</span>
-            <span class="conn-arrow">→</span>
-            <span class="conn-label">{{ conn.to.nodeId }}:{{ conn.to.portId }}</span>
-            <span class="conn-wp">{{ conn.waypoints.length }}wp</span>
-            <button class="conn-del" @click.stop="deleteConnection(conn.id)" title="Delete">×</button>
+          <div v-for="conn in connections" :key="conn.id" class="conn-item"
+            :class="{ selected: selectedConnId === conn.id }" @click="selectedConnId = conn.id">
+            <span class="cl">{{ conn.from.nodeId }}:{{ conn.from.portId }}</span>
+            <span class="ca">→</span>
+            <span class="cl">{{ conn.to.nodeId }}:{{ conn.to.portId }}</span>
+            <span class="cw">{{ conn.waypoints.length }}wp</span>
+            <button class="cd" @click.stop="deleteConnection(conn.id)">×</button>
           </div>
-          <div v-if="connections.length === 0" class="conn-empty">No connections yet. Draw one!</div>
+          <div v-if="!connections.length" class="conn-empty">Click a port to start drawing.</div>
         </div>
-
         <div class="ctrl-section">
-          <div class="ctrl-heading">Actions</div>
-          <button class="action-btn" @click="resetAll">Reset All</button>
-          <button class="action-btn" @click="logJson">Log JSON</button>
+          <button class="action-btn" @click="resetAll">Clear All</button>
+          <button class="action-btn" @click="exportJson">Export JSON</button>
         </div>
       </aside>
 
-      <!-- ── Canvas ── -->
-      <div class="canvas-area" ref="canvasArea">
-        <svg
-          ref="svgEl"
-          class="canvas-svg"
-          :viewBox="`0 0 ${canvasW} ${canvasH}`"
-          @mousemove="handleMouseMove"
-          @click="handleCanvasClick"
-          @contextmenu.prevent="cancelDrawing"
-          @keydown.escape="cancelDrawing"
-          tabindex="0"
-        >
+      <div class="canvas-area">
+        <svg ref="svgEl" class="canvas-svg" :viewBox="`0 0 ${canvasW} ${canvasH}`"
+          @mousemove="handleMouseMove" @click="handleCanvasClick"
+          @contextmenu.prevent="cancelDrawing" @keydown.escape="cancelDrawing" tabindex="0">
           <defs>
-            <pattern id="lab-grid" :width="gridSize" :height="gridSize" patternUnits="userSpaceOnUse">
+            <pattern id="sg" :width="gridSize" :height="gridSize" patternUnits="userSpaceOnUse">
               <path :d="`M ${gridSize} 0 L 0 0 0 ${gridSize}`" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="0.5" />
             </pattern>
-            <pattern id="lab-grid-lg" :width="gridSize*5" :height="gridSize*5" patternUnits="userSpaceOnUse">
-              <rect :width="gridSize*5" :height="gridSize*5" fill="url(#lab-grid)" />
+            <pattern id="lg" :width="gridSize*5" :height="gridSize*5" patternUnits="userSpaceOnUse">
+              <rect :width="gridSize*5" :height="gridSize*5" fill="url(#sg)" />
               <path :d="`M ${gridSize*5} 0 L 0 0 0 ${gridSize*5}`" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="0.5" />
             </pattern>
           </defs>
-
-          <!-- Grid -->
-          <rect x="0" y="0" :width="canvasW" :height="canvasH" fill="url(#lab-grid-lg)" />
+          <rect x="0" y="0" :width="canvasW" :height="canvasH" fill="url(#lg)" />
 
           <!-- Alignment guides -->
           <g v-if="showGuides && drawState.isDrawing && mousePos">
-            <line :x1="drawState.lastPoint.x" :y1="0" :x2="drawState.lastPoint.x" :y2="canvasH"
-                  stroke="rgba(88,166,255,0.12)" stroke-width="0.5" stroke-dasharray="4 4" />
-            <line :x1="0" :y1="drawState.lastPoint.y" :x2="canvasW" :y2="drawState.lastPoint.y"
-                  stroke="rgba(88,166,255,0.12)" stroke-width="0.5" stroke-dasharray="4 4" />
+            <line :x1="drawState.lastPoint.x" y1="0" :x2="drawState.lastPoint.x" :y2="canvasH" stroke="rgba(88,166,255,0.1)" stroke-width="0.5" stroke-dasharray="4 4" />
+            <line x1="0" :y1="drawState.lastPoint.y" :x2="canvasW" :y2="drawState.lastPoint.y" stroke="rgba(88,166,255,0.1)" stroke-width="0.5" stroke-dasharray="4 4" />
           </g>
 
-          <!-- ═══ Finished connections ═══ -->
-          <g v-for="conn in connections" :key="conn.id" class="conn-group"
-             :class="{ 'conn-selected': selectedConnId === conn.id }"
-             @click.stop="selectedConnId = conn.id">
-            <!-- Hit area -->
-            <path :d="buildPath(conn)" fill="none" stroke="transparent" stroke-width="12" />
-            <!-- Selection glow -->
-            <path v-if="selectedConnId === conn.id" :d="buildPath(conn)"
-                  fill="none" stroke="rgba(88,166,255,0.25)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
-            <!-- Body -->
-            <path :d="buildPath(conn)" fill="none" stroke="#58a6ff" stroke-width="3"
-                  stroke-linecap="round" stroke-linejoin="round" />
-            <!-- Flow -->
-            <path :d="buildPath(conn)" fill="none" stroke="#8dc8ff" stroke-width="2"
-                  stroke-dasharray="8 6" stroke-linecap="round" class="flow-anim" />
-            <!-- Waypoint handles (when selected) -->
+          <!-- ═══ FINISHED CONNECTIONS ═══ -->
+          <g v-for="conn in connections" :key="conn.id"
+            :class="{ 'conn-sel': selectedConnId === conn.id }" @click.stop="selectedConnId = conn.id">
+            <!-- Selection glow + hit area (editor overlay) -->
+            <path v-if="selectedConnId === conn.id" :d="makePath(conn)" fill="none" stroke="rgba(88,166,255,0.25)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+            <path :d="makePath(conn)" fill="none" stroke="transparent" stroke-width="14" style="pointer-events:stroke;cursor:pointer" />
+            <!-- YOUR LIBRARY: ConnectionPipe — used as-is -->
+            <ConnectionPipe
+              :start-position="getPortWorld(conn.from.nodeId, conn.from.portId)"
+              :end-position="getPortWorld(conn.to.nodeId, conn.to.portId)"
+              :waypoints="conn.waypoints"
+              :flowing="conn.props.flowing"
+              :direction="conn.props.direction"
+            />
+            <!-- Waypoint handles (editor overlay, shown when selected) -->
             <g v-if="selectedConnId === conn.id">
-              <circle
-                v-for="(wp, i) in conn.waypoints"
-                :key="i"
-                :cx="wp.x" :cy="wp.y" r="4"
-                fill="#0e1117" stroke="#58a6ff" stroke-width="1.5"
-                class="wp-handle"
-                @mousedown.stop="startDragWaypoint(conn.id, i, $event)"
-              />
+              <circle v-for="(wp, i) in conn.waypoints" :key="i" :cx="wp.x" :cy="wp.y" r="4"
+                fill="#0e1117" stroke="#58a6ff" stroke-width="1.5" class="wp-handle"
+                @mousedown.stop="startWpDrag(conn.id, i, $event)"
+                @dblclick.stop="conn.waypoints.splice(i, 1)" />
             </g>
           </g>
 
-          <!-- ═══ In-progress pipe (preview) ═══ -->
+          <!-- ═══ PREVIEW PIPE (drawing in progress) ═══ -->
           <g v-if="drawState.isDrawing">
-            <!-- Committed segments -->
-            <path v-if="previewCommittedPath" :d="previewCommittedPath"
-                  fill="none" stroke="#58a6ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
-            <!-- Rubber-band segment (mouse follow) -->
-            <path v-if="previewRubberPath" :d="previewRubberPath"
-                  fill="none" stroke="#58a6ff" stroke-width="2" stroke-dasharray="6 4" stroke-linecap="round" stroke-linejoin="round" opacity="0.6" />
-            <!-- Committed waypoint dots -->
-            <circle v-for="(wp, i) in drawState.waypoints" :key="i"
-                    :cx="wp.x" :cy="wp.y" r="3" fill="#58a6ff" opacity="0.8" />
-            <!-- Start point indicator -->
-            <circle :cx="drawState.startPortWorldPos.x" :cy="drawState.startPortWorldPos.y"
-                    r="6" fill="none" stroke="#58a6ff" stroke-width="2" opacity="0.5">
-              <animate attributeName="r" from="6" to="12" dur="1.5s" repeatCount="indefinite" />
-              <animate attributeName="opacity" from="0.5" to="0" dur="1.5s" repeatCount="indefinite" />
-            </circle>
+            <!-- Already committed segments — use your ConnectionPipe -->
+            <ConnectionPipe v-if="drawState.waypoints.length > 0"
+              :start-position="drawState.startPortWorldPos"
+              :end-position="drawState.waypoints[drawState.waypoints.length - 1]"
+              :waypoints="drawState.waypoints.slice(0, -1)"
+              :flowing="false"
+            />
+            <!-- Rubber-band to mouse (editor-only, dashed preview) -->
+            <path v-if="rubberPath" :d="rubberPath" fill="none" stroke="#58a6ff" stroke-width="2"
+              stroke-dasharray="6 4" stroke-linecap="round" stroke-linejoin="round" opacity="0.5" />
+            <!-- Start pulse -->
+            <circle :cx="drawState.startPortWorldPos.x" :cy="drawState.startPortWorldPos.y" r="6"
+              fill="none" stroke="#58a6ff" stroke-width="1.5" class="pulse" />
           </g>
 
-          <!-- ═══ Components (static positions) ═══ -->
-          <g v-for="node in nodes" :key="node.id"
-             :transform="`translate(${node.position.x}, ${node.position.y})`"
-             class="node-group">
+          <!-- ═══ COMPONENTS (your library, rendered as-is) ═══ -->
+          <g v-for="node in nodes" :key="node.id">
+            <!--
+              Wrapper <g> positions the component on canvas.
+              Inside: your real component + invisible port hit-targets overlaid on top.
+              
+              The component handles its own rendering, ports, labels, colors.
+              We ONLY add larger invisible circles on top of each port
+              so the user has a bigger click target during pipe drawing.
+            -->
+            <g :transform="`translate(${node.position.x}, ${node.position.y})`" class="node-group">
 
-            <!-- ManualValve -->
-            <g v-if="node.typeId === 'manual-valve'">
-              <path d="M 0 0 L 20 12 L 0 24 Z" :fill="node.props.state === 'open' ? '#3fb950' : '#f85149'" stroke="#bbb" stroke-width="1.5" />
-              <path d="M 40 0 L 20 12 L 40 24 Z" :fill="node.props.state === 'open' ? '#3fb950' : '#f85149'" stroke="#bbb" stroke-width="1.5" />
-              <text x="20" y="-7" text-anchor="middle" class="n-label">{{ node.label }}</text>
-            </g>
+              <!-- YOUR LIBRARY COMPONENT (rendered by type) -->
+              <ManualValve v-if="node.typeId === 'manual-valve'"
+                :state="node.props.state" :alarm="node.props.alarm || 'none'"
+                :label="node.label" :show-label="true" :show-ports="showPortDots" />
 
-            <!-- Pump -->
-            <g v-else-if="node.typeId === 'centrifugal-pump'">
-              <circle cx="20" cy="20" r="18" :fill="node.props.state === 'running' ? '#3fb950' : '#555'" stroke="#bbb" stroke-width="1.5" />
-              <g :class="{ rotating: node.props.state === 'running' }" style="transform-origin: 20px 20px">
-                <line x1="20" y1="5" x2="20" y2="35" stroke="#fff" stroke-width="2" opacity="0.5" />
-                <line x1="5" y1="20" x2="35" y2="20" stroke="#fff" stroke-width="2" opacity="0.5" />
-              </g>
-              <rect x="36" y="14" width="8" height="12" :fill="node.props.state === 'running' ? '#3fb950' : '#555'" stroke="#bbb" stroke-width="1" />
-              <text x="22" y="-7" text-anchor="middle" class="n-label">{{ node.label }}</text>
-            </g>
+              <CentrifugalPump v-else-if="node.typeId === 'centrifugal-pump'"
+                :state="node.props.state" :alarm="node.props.alarm || 'none'"
+                :label="node.label" :show-label="true" :show-ports="showPortDots" />
 
-            <!-- Tank -->
-            <g v-else-if="node.typeId === 'vertical-tank'">
-              <rect x="0" y="0" width="60" height="120" rx="4" fill="none" stroke="#bbb" stroke-width="1.5" />
-              <rect x="1.5" :y="120 - (node.props.level/100*117) - 1.5" width="57" :height="node.props.level/100*117" rx="2" fill="#2a6db5" opacity="0.6" />
-              <text x="30" y="65" text-anchor="middle" class="tank-text">{{ node.props.level }}%</text>
-              <text x="30" y="-7" text-anchor="middle" class="n-label">{{ node.label }}</text>
-            </g>
+              <VerticalTank v-else-if="node.typeId === 'vertical-tank'"
+                :level="node.props.level" :alarm="node.props.alarm || 'none'"
+                :label="node.label" :show-label="true" :show-ports="showPortDots" />
 
-            <!-- Sensor -->
-            <g v-else-if="node.typeId === 'pressure-sensor'">
-              <circle cx="16" cy="16" r="14" fill="#21262d" stroke="#3fb950" stroke-width="2" />
-              <text x="16" y="14" text-anchor="middle" class="sensor-val">{{ node.props.value }}</text>
-              <text x="16" y="23" text-anchor="middle" class="sensor-unit">{{ node.props.units }}</text>
-              <text x="16" y="-7" text-anchor="middle" class="n-label">{{ node.label }}</text>
-            </g>
+              <PressureSensor v-else-if="node.typeId === 'pressure-sensor'"
+                :value="node.props.value" :alarm="node.props.alarm || 'none'"
+                :label="node.label" :show-label="true" :show-ports="showPortDots" />
 
-            <!-- Port dots -->
-            <g v-if="showPorts">
-              <circle
-                v-for="port in getNodePorts(node)"
-                :key="port.id"
-                :cx="port.position.x" :cy="port.position.y"
-                r="4"
-                :fill="isPortHighlighted(node.id, port.id) ? '#58a6ff' : '#0e1117'"
-                :stroke="isPortHighlighted(node.id, port.id) ? '#58a6ff' : '#8b949e'"
-                :stroke-width="isPortHighlighted(node.id, port.id) ? 2 : 1.5"
-                class="port-dot"
+              <!-- EDITOR OVERLAY: port hit-targets (invisible, larger radius for easy clicking) -->
+              <circle v-for="port in getNodePorts(node)" :key="port.id"
+                :cx="port.x" :cy="port.y" r="8"
+                fill="transparent" class="port-target"
+                :class="{ highlighted: isPortHigh(node.id, port.id), snapping: isSnapTarget(node.id, port.id) }"
                 @click.stop="handlePortClick(node.id, port.id)"
-                @mouseenter="hoveredPort = { nodeId: node.id, portId: port.id }"
-                @mouseleave="hoveredPort = null"
-              />
+                @mouseenter="hovered = { n: node.id, p: port.id }"
+                @mouseleave="hovered = null" />
             </g>
           </g>
 
-          <!-- Port snap indicator (when hovering valid target during drawing) -->
-          <g v-if="snapTarget">
-            <circle :cx="snapTarget.world.x" :cy="snapTarget.world.y" r="8"
-                    fill="none" stroke="#3fb950" stroke-width="2" opacity="0.8">
-              <animate attributeName="r" from="8" to="14" dur="1s" repeatCount="indefinite" />
-              <animate attributeName="opacity" from="0.8" to="0" dur="1s" repeatCount="indefinite" />
-            </circle>
-          </g>
+          <!-- Snap indicator -->
+          <circle v-if="snapInfo" :cx="snapInfo.world.x" :cy="snapInfo.world.y" r="10"
+            fill="none" stroke="#3fb950" stroke-width="2" class="pulse-green" />
         </svg>
 
-        <!-- Mode badge -->
-        <div class="mode-badge" :class="drawingMode">
-          {{ drawingMode.toUpperCase() }} MODE
-        </div>
-
-        <!-- Drawing status -->
+        <div class="mode-badge" :class="drawingMode">{{ drawingMode.toUpperCase() }}</div>
         <div v-if="drawState.isDrawing" class="draw-status">
-          <span class="draw-status-dot" />
-          Drawing from <strong>{{ drawState.fromNodeId }}:{{ drawState.fromPortId }}</strong>
-          · {{ drawState.waypoints.length }} waypoints
-          · <em>{{ drawingMode === 'click' ? 'Click to place waypoints, click a port to finish' : drawingMode === 'ortho' ? 'Click to place H/V segments, click a port to finish' : 'Click target port' }}</em>
-          · <button class="cancel-link" @click="cancelDrawing">Cancel (Esc)</button>
+          <span class="dot" /> Drawing from <strong>{{ drawState.fromNodeId }}:{{ drawState.fromPortId }}</strong>
+          · {{ drawState.waypoints.length }}wp
+          · <button class="cancel-link" @click="cancelDrawing">Cancel</button>
         </div>
       </div>
     </div>
@@ -252,596 +180,301 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 
-// ═══════════════════════════════════════════
-//  TYPES
-// ═══════════════════════════════════════════
+// ═══════════════════════════════════════════════
+//  YOUR LIBRARY IMPORTS
+//  Adjust paths to your project structure.
+//  ZERO changes to these components are needed.
+// ═══════════════════════════════════════════════
 
-interface Position { x: number; y: number }
-interface PortDef { id: string; position: Position; direction: string }
-interface NodeData {
-  id: string; typeId: string; position: Position; label: string; props: Record<string, any>
-}
-interface Connection {
-  id: string
-  from: { nodeId: string; portId: string }
-  to: { nodeId: string; portId: string }
-  waypoints: Position[]
+import ManualValve from '@/lib/components/PID/valves/ManualValve.vue'
+import CentrifugalPump from '@/lib/components/PID/pumps/CentrifugalPump.vue'
+import VerticalTank from '@/lib/components/PID/tanks/VerticalTank.vue'
+import PressureSensor from '@/lib/components/PID/sensors/PressureSensor.vue'
+import ConnectionPipe from '@/lib/components/PID/connectors/ConnectionPipe.vue'
+
+import {
+  calculateManualValvePorts,
+  calculateTankPorts,
+  calculateCirclePorts,
+} from '@/lib/utils/positions'
+
+import {
+  MANUAL_VALVE_DEFAULT_DIMENSIONS,
+  TANK_DEFAULT_DIMENSIONS,
+} from '@/lib/constants'
+
+import type { PortDefinition, Position } from '@/lib/types'
+
+// ═══════════════════════════════════════════════
+//  PORT LOOKUP
+//  Bridges your calculate*Ports() with editor needs.
+//  No library change — this lives in the editor.
+// ═══════════════════════════════════════════════
+
+// NOTE: If your pump/sensor have their own calculate*Ports functions,
+// import and use those instead. These are reasonable defaults
+// based on what I saw in your positions.ts.
+const PUMP_RADIUS = 18
+const SENSOR_RADIUS = 14
+
+function getPortsForType(typeId: string): PortDefinition[] {
+  switch (typeId) {
+    case 'manual-valve':
+      return calculateManualValvePorts(MANUAL_VALVE_DEFAULT_DIMENSIONS.width, MANUAL_VALVE_DEFAULT_DIMENSIONS.height)
+    case 'vertical-tank':
+      return calculateTankPorts(TANK_DEFAULT_DIMENSIONS.width, TANK_DEFAULT_DIMENSIONS.height)
+    case 'centrifugal-pump':
+      return calculateCirclePorts(PUMP_RADIUS)
+    case 'pressure-sensor':
+      return calculateCirclePorts(SENSOR_RADIUS)
+    default:
+      return []
+  }
 }
 
-// ═══════════════════════════════════════════
-//  PORT REGISTRY
-// ═══════════════════════════════════════════
+// ═══════════════════════════════════════════════
+//  TYPES & STATE
+// ═══════════════════════════════════════════════
 
-const PORT_DEFS: Record<string, PortDef[]> = {
-  'manual-valve': [
-    { id: 'inlet', position: { x: 0, y: 12 }, direction: 'left' },
-    { id: 'outlet', position: { x: 40, y: 12 }, direction: 'right' },
-  ],
-  'centrifugal-pump': [
-    { id: 'inlet', position: { x: 0, y: 20 }, direction: 'left' },
-    { id: 'outlet', position: { x: 44, y: 20 }, direction: 'right' },
-  ],
-  'vertical-tank': [
-    { id: 'top', position: { x: 30, y: 0 }, direction: 'up' },
-    { id: 'bottom', position: { x: 30, y: 120 }, direction: 'down' },
-    { id: 'side', position: { x: 60, y: 60 }, direction: 'right' },
-  ],
-  'pressure-sensor': [
-    { id: 'bottom', position: { x: 16, y: 32 }, direction: 'down' },
-  ],
+interface NodeData { id: string; typeId: string; position: Position; label: string; props: Record<string, any> }
+interface ConnData {
+  id: string; from: { nodeId: string; portId: string }; to: { nodeId: string; portId: string }
+  waypoints: Position[]; props: { flowing: boolean; direction: string }
 }
+type DrawMode = 'auto' | 'click' | 'ortho'
 
-function getNodePorts(node: NodeData): PortDef[] {
-  return PORT_DEFS[node.typeId] || []
-}
+const canvasW = 900, canvasH = 500, gridSize = ref(10)
+const snapToGrid = ref(true), showPortDots = ref(true), showGuides = ref(true)
+const selectedConnId = ref<string | null>(null)
+const hovered = ref<{ n: string; p: string } | null>(null)
+const mousePos = ref<Position | null>(null)
+const svgEl = ref<SVGSVGElement | null>(null)
+const drawingMode = ref<DrawMode>('click')
+let connCtr = 0
+
+const drawState = reactive({
+  isDrawing: false, fromNodeId: '', fromPortId: '',
+  startPortWorldPos: { x: 0, y: 0 } as Position,
+  waypoints: [] as Position[], lastPoint: { x: 0, y: 0 } as Position,
+})
+const wpDrag = reactive({ active: false, connId: '', idx: -1 })
+
+const modes = [
+  { id: 'auto' as DrawMode, icon: '⚡', name: 'Auto Route', desc: 'Port → Port. System picks route.' },
+  { id: 'click' as DrawMode, icon: '✎', name: 'Free Draw', desc: 'Click to place waypoints freely.' },
+  { id: 'ortho' as DrawMode, icon: '⊾', name: 'Ortho Draw', desc: 'Horizontal/Vertical segments only.' },
+]
+
+const nodes = reactive<NodeData[]>([
+  { id: 'T-001', typeId: 'vertical-tank', position: { x: 50, y: 80 }, label: 'T-001', props: { level: 65, alarm: 'none' } },
+  { id: 'V-001', typeId: 'manual-valve', position: { x: 230, y: 198 }, label: 'V-001', props: { state: 'open', alarm: 'none' } },
+  { id: 'P-001', typeId: 'centrifugal-pump', position: { x: 370, y: 192 }, label: 'P-001', props: { state: 'running', alarm: 'none' } },
+  { id: 'T-002', typeId: 'vertical-tank', position: { x: 540, y: 80 }, label: 'T-002', props: { level: 40, alarm: 'none' } },
+  { id: 'V-002', typeId: 'manual-valve', position: { x: 710, y: 198 }, label: 'V-002', props: { state: 'closed', alarm: 'none' } },
+  { id: 'PT-001', typeId: 'pressure-sensor', position: { x: 460, y: 50 }, label: 'PT-001', props: { value: 125.5, units: 'PSI', alarm: 'none' } },
+])
+
+const connections = reactive<ConnData[]>([])
+
+// ═══════════════════════════════════════════════
+//  PORT HELPERS
+// ═══════════════════════════════════════════════
+
+function getNodePorts(node: NodeData): PortDefinition[] { return getPortsForType(node.typeId) }
 
 function getPortWorld(nodeId: string, portId: string): Position {
   const node = nodes.find(n => n.id === nodeId)
   if (!node) return { x: 0, y: 0 }
-  const port = (PORT_DEFS[node.typeId] || []).find(p => p.id === portId)
+  const port = getPortsForType(node.typeId).find(p => p.id === portId)
   if (!port) return node.position
-  return { x: node.position.x + port.position.x, y: node.position.y + port.position.y }
+  return { x: node.position.x + port.x, y: node.position.y + port.y }
 }
 
-function getPortDirection(nodeId: string, portId: string): string {
-  const node = nodes.find(n => n.id === nodeId)
-  if (!node) return 'right'
-  const port = (PORT_DEFS[node.typeId] || []).find(p => p.id === portId)
-  return port?.direction || 'right'
+function getPortDir(nodeId: string, portId: string): string {
+  if (portId.includes('left')) return 'left'
+  if (portId.includes('right')) return 'right'
+  if (portId.includes('top')) return 'up'
+  if (portId.includes('bottom')) return 'down'
+  return 'right'
 }
 
-// ═══════════════════════════════════════════
-//  STATIC NODES (test layout)
-// ═══════════════════════════════════════════
+function isPortHigh(nid: string, pid: string): boolean {
+  return (hovered.value?.n === nid && hovered.value?.p === pid) ||
+    (drawState.isDrawing && drawState.fromNodeId === nid && drawState.fromPortId === pid)
+}
+function isSnapTarget(nid: string, pid: string): boolean {
+  return snapInfo.value?.nodeId === nid && snapInfo.value?.portId === pid
+}
 
-const nodes = reactive<NodeData[]>([
-  { id: 'T-001', typeId: 'vertical-tank', position: { x: 80, y: 120 }, label: 'T-001', props: { level: 65 } },
-  { id: 'V-001', typeId: 'manual-valve', position: { x: 240, y: 228 }, label: 'V-001', props: { state: 'open' } },
-  { id: 'P-001', typeId: 'centrifugal-pump', position: { x: 380, y: 220 }, label: 'P-001', props: { state: 'running' } },
-  { id: 'T-002', typeId: 'vertical-tank', position: { x: 560, y: 120 }, label: 'T-002', props: { level: 40 } },
-  { id: 'V-002', typeId: 'manual-valve', position: { x: 700, y: 228 }, label: 'V-002', props: { state: 'closed' } },
-  { id: 'PT-001', typeId: 'pressure-sensor', position: { x: 465, y: 80 }, label: 'PT-001', props: { value: 125.5, units: 'PSI' } },
-])
-
-// ═══════════════════════════════════════════
-//  STATE
-// ═══════════════════════════════════════════
-
-const canvasW = 900
-const canvasH = 500
-const gridSize = ref(10)
-const snapToGrid = ref(true)
-const showPorts = ref(true)
-const showGuides = ref(true)
-const selectedConnId = ref<string | null>(null)
-const hoveredPort = ref<{ nodeId: string; portId: string } | null>(null)
-const mousePos = ref<Position | null>(null)
-const svgEl = ref<SVGSVGElement | null>(null)
-const canvasArea = ref<HTMLDivElement | null>(null)
-
-const connections = reactive<Connection[]>([])
-
-type DrawMode = 'auto' | 'click' | 'ortho'
-const drawingMode = ref<DrawMode>('click')
-
-const drawState = reactive({
-  isDrawing: false,
-  fromNodeId: '',
-  fromPortId: '',
-  startPortWorldPos: { x: 0, y: 0 } as Position,
-  waypoints: [] as Position[],
-  lastPoint: { x: 0, y: 0 } as Position,
-})
-
-// Waypoint dragging
-const wpDrag = reactive({
-  active: false,
-  connId: '',
-  wpIndex: -1,
-  offset: { x: 0, y: 0 },
-})
-
-const modes = [
-  { id: 'auto' as DrawMode, icon: '⚡', name: 'Auto Route', desc: 'Click port A → port B. System picks the route.' },
-  { id: 'click' as DrawMode, icon: '✎', name: 'Click to Place', desc: 'Click canvas to drop waypoints freely.' },
-  { id: 'ortho' as DrawMode, icon: '⊾', name: 'Ortho Draw', desc: 'Like Click, but locked to H/V segments.' },
-]
-
-let connCounter = 0
-function nextConnId(): string { return `conn-${++connCounter}` }
-
-// ═══════════════════════════════════════════
+// ═══════════════════════════════════════════════
 //  COMPUTED
-// ═══════════════════════════════════════════
+// ═══════════════════════════════════════════════
 
 const currentInstructions = computed(() => {
-  if (drawState.isDrawing) {
-    if (drawingMode.value === 'auto') return '<b>Click a target port</b> to complete the connection.<br/>Right-click or Esc to cancel.'
-    if (drawingMode.value === 'click') return '<b>Click on canvas</b> to place waypoints at any angle.<br/><b>Click a port</b> to finish.<br/>Right-click or Esc to cancel.'
-    return '<b>Click on canvas</b> to place orthogonal waypoints (H/V only).<br/><b>Click a port</b> to finish.<br/>Right-click or Esc to cancel.'
-  }
-  return '<b>Click any port</b> (blue/yellow dot) to start drawing a pipe.'
+  if (!drawState.isDrawing) return '<b>Click any port</b> to start drawing a pipe.'
+  if (drawingMode.value === 'auto') return '<b>Click target port</b> to complete. Esc to cancel.'
+  if (drawingMode.value === 'click') return '<b>Click canvas</b> = waypoint. <b>Click port</b> = finish. Esc/right-click = cancel.'
+  return '<b>Click canvas</b> = H/V waypoint. <b>Click port</b> = finish. Esc = cancel.'
 })
 
-const snapTarget = computed<{ nodeId: string; portId: string; world: Position } | null>(() => {
+const snapInfo = computed<{ nodeId: string; portId: string; world: Position } | null>(() => {
   if (!drawState.isDrawing || !mousePos.value) return null
-  const SNAP_DIST = 15
   for (const node of nodes) {
     for (const port of getNodePorts(node)) {
-      // Don't snap to start port
       if (node.id === drawState.fromNodeId && port.id === drawState.fromPortId) continue
-      const world = { x: node.position.x + port.position.x, y: node.position.y + port.position.y }
-      const dx = world.x - mousePos.value.x
-      const dy = world.y - mousePos.value.y
-      if (Math.sqrt(dx * dx + dy * dy) < SNAP_DIST) {
-        return { nodeId: node.id, portId: port.id, world }
-      }
+      const w = { x: node.position.x + port.x, y: node.position.y + port.y }
+      if (Math.hypot(w.x - mousePos.value.x, w.y - mousePos.value.y) < 18) return { nodeId: node.id, portId: port.id, world: w }
     }
   }
   return null
 })
 
-const previewCommittedPath = computed(() => {
-  if (!drawState.isDrawing) return ''
-  const pts = [drawState.startPortWorldPos, ...drawState.waypoints]
-  if (pts.length < 2) return ''
-  return ptsToSvgPath(pts)
-})
-
-const previewRubberPath = computed(() => {
+const rubberPath = computed(() => {
   if (!drawState.isDrawing || !mousePos.value) return ''
-  const from = drawState.waypoints.length > 0
-    ? drawState.waypoints[drawState.waypoints.length - 1]
-    : drawState.startPortWorldPos
-  const to = snapTarget.value ? snapTarget.value.world : mousePos.value
-
-  if (drawingMode.value === 'ortho') {
-    // Orthogonal: show L-shape preview (horizontal then vertical)
-    const mid = { x: to.x, y: from.y }
-    return ptsToSvgPath([from, mid, to])
-  }
-  return ptsToSvgPath([from, to])
+  const from = drawState.waypoints.length > 0 ? drawState.waypoints[drawState.waypoints.length - 1] : drawState.startPortWorldPos
+  const to = snapInfo.value ? snapInfo.value.world : mousePos.value
+  if (drawingMode.value === 'ortho') return `M ${from.x} ${from.y} L ${to.x} ${from.y} L ${to.x} ${to.y}`
+  return `M ${from.x} ${from.y} L ${to.x} ${to.y}`
 })
 
-// ═══════════════════════════════════════════
-//  AUTO-ROUTING ALGORITHM
-// ═══════════════════════════════════════════
-
-function generateAutoRoute(
-  startPos: Position, startDir: string,
-  endPos: Position, endDir: string
-): Position[] {
-  const MIN_STUB = 25 // minimum extension from port before turning
-
-  // Compute stub exit points (extend from port in its direction)
-  const stubStart = extendInDirection(startPos, startDir, MIN_STUB)
-  const stubEnd = extendInDirection(endPos, endDir, MIN_STUB)
-
-  // If stubs are roughly aligned horizontally, simple Z-route
-  if (Math.abs(stubStart.y - stubEnd.y) < 3) {
-    // Already on same horizontal — straight through
-    return maybeStubs(startPos, startDir, endPos, endDir, MIN_STUB, [])
-  }
-
-  // General case: route stub → horizontal jog → vertical jog → stub
-  const midX = (stubStart.x + stubEnd.x) / 2
-  const waypoints = [
-    stubStart,
-    { x: midX, y: stubStart.y },
-    { x: midX, y: stubEnd.y },
-    stubEnd,
-  ]
-
-  // Clean up: remove redundant collinear points
-  return simplifyWaypoints(waypoints)
+function makePath(conn: ConnData): string {
+  const s = getPortWorld(conn.from.nodeId, conn.from.portId), e = getPortWorld(conn.to.nodeId, conn.to.portId)
+  return [s, ...conn.waypoints, e].map((p, i) => `${i ? 'L' : 'M'} ${p.x} ${p.y}`).join(' ')
 }
 
-function extendInDirection(pos: Position, dir: string, dist: number): Position {
-  switch (dir) {
-    case 'right': return { x: pos.x + dist, y: pos.y }
-    case 'left':  return { x: pos.x - dist, y: pos.y }
-    case 'down':  return { x: pos.x, y: pos.y + dist }
-    case 'up':    return { x: pos.x, y: pos.y - dist }
-    default:      return { x: pos.x + dist, y: pos.y }
-  }
-}
+// ═══════════════════════════════════════════════
+//  AUTO ROUTING
+// ═══════════════════════════════════════════════
 
-function maybeStubs(
-  startPos: Position, startDir: string,
-  endPos: Position, endDir: string,
-  stubLen: number, middle: Position[]
-): Position[] {
-  const pts: Position[] = []
-  // Only add stubs if direction doesn't point toward the target naturally
-  const dx = endPos.x - startPos.x
-  if ((startDir === 'right' && dx < stubLen) || (startDir === 'left' && dx > -stubLen) ||
-      startDir === 'up' || startDir === 'down') {
-    pts.push(extendInDirection(startPos, startDir, stubLen))
-  }
-  pts.push(...middle)
-  if ((endDir === 'left' && dx < stubLen) || (endDir === 'right' && dx > -stubLen) ||
-      endDir === 'up' || endDir === 'down') {
-    pts.push(extendInDirection(endPos, endDir, stubLen))
-  }
-  return simplifyWaypoints(pts)
+function autoRoute(sp: Position, sd: string, ep: Position, ed: string): Position[] {
+  const S = 25
+  const s = ext(sp, sd, S), e = ext(ep, ed, S), mx = (s.x + e.x) / 2
+  return simplify([s, { x: mx, y: s.y }, { x: mx, y: e.y }, e])
 }
-
-function simplifyWaypoints(pts: Position[]): Position[] {
+function ext(p: Position, d: string, n: number): Position {
+  return d === 'right' ? { x: p.x + n, y: p.y } : d === 'left' ? { x: p.x - n, y: p.y } : d === 'down' ? { x: p.x, y: p.y + n } : { x: p.x, y: p.y - n }
+}
+function simplify(pts: Position[]): Position[] {
   if (pts.length <= 2) return pts
-  const result = [pts[0]]
+  const o = [pts[0]]
   for (let i = 1; i < pts.length - 1; i++) {
-    if (!isCollinear(pts[i - 1], pts[i], pts[i + 1])) {
-      result.push(pts[i])
-    }
+    const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]]
+    if (Math.abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) > 2) o.push(b)
   }
-  result.push(pts[pts.length - 1])
-  return result
+  o.push(pts[pts.length - 1]); return o
 }
 
-function isCollinear(a: Position, b: Position, c: Position): boolean {
-  // Cross product ≈ 0 means collinear
-  return Math.abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) < 2
-}
-
-// ═══════════════════════════════════════════
+// ═══════════════════════════════════════════════
 //  COORDINATE HELPERS
-// ═══════════════════════════════════════════
+// ═══════════════════════════════════════════════
 
-function svgPoint(e: MouseEvent): Position {
+function toSvg(e: MouseEvent): Position {
   if (!svgEl.value) return { x: 0, y: 0 }
-  const pt = svgEl.value.createSVGPoint()
-  pt.x = e.clientX
-  pt.y = e.clientY
-  const ctm = svgEl.value.getScreenCTM()
-  if (!ctm) return { x: 0, y: 0 }
-  const svgPt = pt.matrixTransform(ctm.inverse())
-  return { x: svgPt.x, y: svgPt.y }
+  const pt = svgEl.value.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY
+  const ctm = svgEl.value.getScreenCTM(); if (!ctm) return { x: 0, y: 0 }
+  const s = pt.matrixTransform(ctm.inverse()); return { x: s.x, y: s.y }
+}
+function snap(p: Position): Position {
+  if (!snapToGrid.value) return p
+  return { x: Math.round(p.x / gridSize.value) * gridSize.value, y: Math.round(p.y / gridSize.value) * gridSize.value }
 }
 
-function snap(pos: Position): Position {
-  if (!snapToGrid.value) return pos
-  return {
-    x: Math.round(pos.x / gridSize.value) * gridSize.value,
-    y: Math.round(pos.y / gridSize.value) * gridSize.value,
-  }
-}
-
-function ptsToSvgPath(pts: Position[]): string {
-  if (pts.length < 2) return ''
-  return `M ${pts[0].x} ${pts[0].y} ` + pts.slice(1).map(p => `L ${p.x} ${p.y}`).join(' ')
-}
-
-function buildPath(conn: Connection): string {
-  const start = getPortWorld(conn.from.nodeId, conn.from.portId)
-  const end = getPortWorld(conn.to.nodeId, conn.to.portId)
-  return ptsToSvgPath([start, ...conn.waypoints, end])
-}
-
-// ═══════════════════════════════════════════
-//  PORT / CONNECTION HELPERS
-// ═══════════════════════════════════════════
-
-function isPortHighlighted(nodeId: string, portId: string): boolean {
-  if (hoveredPort.value?.nodeId === nodeId && hoveredPort.value?.portId === portId) return true
-  if (drawState.isDrawing && drawState.fromNodeId === nodeId && drawState.fromPortId === portId) return true
-  if (snapTarget.value?.nodeId === nodeId && snapTarget.value?.portId === portId) return true
-  return false
-}
-
-function isPortOccupied(nodeId: string, portId: string): boolean {
-  return connections.some(
-    c => (c.from.nodeId === nodeId && c.from.portId === portId) ||
-         (c.to.nodeId === nodeId && c.to.portId === portId)
-  )
-}
-
-// ═══════════════════════════════════════════
+// ═══════════════════════════════════════════════
 //  DRAWING STATE MACHINE
-// ═══════════════════════════════════════════
+// ═══════════════════════════════════════════════
 
-function handlePortClick(nodeId: string, portId: string) {
+function handlePortClick(nid: string, pid: string) {
   if (!drawState.isDrawing) {
-    // ── Start drawing ──
-    const worldPos = getPortWorld(nodeId, portId)
-    drawState.isDrawing = true
-    drawState.fromNodeId = nodeId
-    drawState.fromPortId = portId
-    drawState.startPortWorldPos = { ...worldPos }
-    drawState.lastPoint = { ...worldPos }
-    drawState.waypoints = []
-    selectedConnId.value = null
-    return
+    const w = getPortWorld(nid, pid)
+    Object.assign(drawState, { isDrawing: true, fromNodeId: nid, fromPortId: pid, startPortWorldPos: { ...w }, lastPoint: { ...w }, waypoints: [] })
+    selectedConnId.value = null; return
   }
-
-  // ── Finish drawing (clicked a target port) ──
-  // Don't allow connecting to start port
-  if (nodeId === drawState.fromNodeId && portId === drawState.fromPortId) return
-
-  let waypoints = [...drawState.waypoints]
-
+  if (nid === drawState.fromNodeId && pid === drawState.fromPortId) return
+  let wp = [...drawState.waypoints]
   if (drawingMode.value === 'auto') {
-    // Auto mode: generate route now
-    const startDir = getPortDirection(drawState.fromNodeId, drawState.fromPortId)
-    const endDir = getPortDirection(nodeId, portId)
-    waypoints = generateAutoRoute(
-      drawState.startPortWorldPos, startDir,
-      getPortWorld(nodeId, portId), endDir
-    )
+    wp = autoRoute(drawState.startPortWorldPos, getPortDir(drawState.fromNodeId, drawState.fromPortId), getPortWorld(nid, pid), getPortDir(nid, pid))
   } else if (drawingMode.value === 'ortho') {
-    // Ortho: add final L-segment to reach port
-    const lastPt = waypoints.length > 0 ? waypoints[waypoints.length - 1] : drawState.startPortWorldPos
-    const endPt = getPortWorld(nodeId, portId)
-    if (Math.abs(lastPt.x - endPt.x) > 2 && Math.abs(lastPt.y - endPt.y) > 2) {
-      // Need a corner: horizontal then vertical
-      waypoints.push({ x: endPt.x, y: lastPt.y })
-    }
+    const last = wp.length ? wp[wp.length - 1] : drawState.startPortWorldPos, end = getPortWorld(nid, pid)
+    if (Math.abs(last.x - end.x) > 2 && Math.abs(last.y - end.y) > 2) wp.push({ x: end.x, y: last.y })
   }
-
-  // Create connection
-  const conn: Connection = {
-    id: nextConnId(),
-    from: { nodeId: drawState.fromNodeId, portId: drawState.fromPortId },
-    to: { nodeId, portId },
-    waypoints: simplifyWaypoints(waypoints),
-  }
-  connections.push(conn)
-  selectedConnId.value = conn.id
-  cancelDrawing()
+  const id = `conn-${++connCtr}`
+  connections.push({ id, from: { nodeId: drawState.fromNodeId, portId: drawState.fromPortId }, to: { nodeId: nid, portId: pid }, waypoints: simplify(wp), props: { flowing: true, direction: 'forward' } })
+  selectedConnId.value = id; cancelDrawing()
 }
 
 function handleCanvasClick(e: MouseEvent) {
   if (!drawState.isDrawing) return
-  if (drawingMode.value === 'auto') return // auto mode: only port clicks finish
-
-  // If snapping to a port, treat as port click
-  if (snapTarget.value) {
-    handlePortClick(snapTarget.value.nodeId, snapTarget.value.portId)
-    return
-  }
-
-  // Place a waypoint
-  const raw = svgPoint(e)
-  const pt = snap(raw)
-
+  if (drawingMode.value === 'auto') return
+  if (snapInfo.value) { handlePortClick(snapInfo.value.nodeId, snapInfo.value.portId); return }
+  const pt = snap(toSvg(e))
   if (drawingMode.value === 'ortho') {
-    // Orthogonal: insert corner point so segments are H/V only
-    const lastPt = drawState.waypoints.length > 0
-      ? drawState.waypoints[drawState.waypoints.length - 1]
-      : drawState.startPortWorldPos
-
-    // If not aligned, add a corner (horizontal first, then vertical)
-    if (Math.abs(lastPt.x - pt.x) > 2 && Math.abs(lastPt.y - pt.y) > 2) {
-      drawState.waypoints.push({ x: pt.x, y: lastPt.y })
-    }
-    drawState.waypoints.push({ ...pt })
-    drawState.lastPoint = { ...pt }
-  } else {
-    // Free mode: place waypoint anywhere
-    drawState.waypoints.push({ ...pt })
-    drawState.lastPoint = { ...pt }
+    const last = drawState.waypoints.length ? drawState.waypoints[drawState.waypoints.length - 1] : drawState.startPortWorldPos
+    if (Math.abs(last.x - pt.x) > 2 && Math.abs(last.y - pt.y) > 2) drawState.waypoints.push({ x: pt.x, y: last.y })
   }
+  drawState.waypoints.push({ ...pt }); drawState.lastPoint = { ...pt }
 }
 
 function handleMouseMove(e: MouseEvent) {
-  const pt = svgPoint(e)
-  mousePos.value = snap(pt)
-
-  // Waypoint dragging
+  mousePos.value = snap(toSvg(e))
   if (wpDrag.active) {
-    const conn = connections.find(c => c.id === wpDrag.connId)
-    if (conn && conn.waypoints[wpDrag.wpIndex]) {
-      const snapped = snap(pt)
-      conn.waypoints[wpDrag.wpIndex] = { x: snapped.x, y: snapped.y }
-    }
+    const c = connections.find(c => c.id === wpDrag.connId)
+    if (c?.waypoints[wpDrag.idx]) c.waypoints[wpDrag.idx] = { ...mousePos.value }
   }
 }
 
-function cancelDrawing() {
-  drawState.isDrawing = false
-  drawState.fromNodeId = ''
-  drawState.fromPortId = ''
-  drawState.waypoints = []
-}
+function cancelDrawing() { Object.assign(drawState, { isDrawing: false, fromNodeId: '', fromPortId: '', waypoints: [] }) }
 
-// ═══════════════════════════════════════════
-//  WAYPOINT DRAGGING (post-draw editing)
-// ═══════════════════════════════════════════
+function startWpDrag(cid: string, idx: number, e: MouseEvent) { Object.assign(wpDrag, { active: true, connId: cid, idx }); e.preventDefault() }
+function globalUp() { wpDrag.active = false }
+onMounted(() => { window.addEventListener('mouseup', globalUp); svgEl.value?.focus() })
+onUnmounted(() => { window.removeEventListener('mouseup', globalUp) })
 
-function startDragWaypoint(connId: string, wpIndex: number, e: MouseEvent) {
-  wpDrag.active = true
-  wpDrag.connId = connId
-  wpDrag.wpIndex = wpIndex
-  e.preventDefault()
-}
-
-function handleGlobalMouseUp() {
-  wpDrag.active = false
-}
-
-onMounted(() => {
-  window.addEventListener('mouseup', handleGlobalMouseUp)
-  // Focus SVG for keyboard events
-  svgEl.value?.focus()
-})
-onUnmounted(() => {
-  window.removeEventListener('mouseup', handleGlobalMouseUp)
-})
-
-// ═══════════════════════════════════════════
-//  ACTIONS
-// ═══════════════════════════════════════════
-
-function deleteConnection(id: string) {
-  const idx = connections.findIndex(c => c.id === id)
-  if (idx >= 0) connections.splice(idx, 1)
-  if (selectedConnId.value === id) selectedConnId.value = null
-}
-
-function resetAll() {
-  connections.splice(0, connections.length)
-  selectedConnId.value = null
-  cancelDrawing()
-}
-
-function logJson() {
-  console.log(JSON.stringify({
-    nodes: nodes.map(n => ({ id: n.id, typeId: n.typeId, position: n.position })),
-    connections: connections.map(c => ({
-      id: c.id, from: c.from, to: c.to,
-      waypoints: c.waypoints,
-    })),
-  }, null, 2))
-  alert('Logged to console — open DevTools to see.')
+function deleteConnection(id: string) { const i = connections.findIndex(c => c.id === id); if (i >= 0) connections.splice(i, 1); if (selectedConnId.value === id) selectedConnId.value = null }
+function resetAll() { connections.splice(0); selectedConnId.value = null; cancelDrawing() }
+function exportJson() {
+  const d = { version: 1, nodes: nodes.map(n => ({ ...n })), connections: connections.map(c => ({ ...c })) }
+  const b = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' })
+  const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = 'diagram.json'; a.click(); URL.revokeObjectURL(u)
 }
 </script>
 
 <style scoped>
-.lab {
-  display: flex; flex-direction: column; height: 100vh; width: 100vw;
-  background: #0e1117; color: #e6edf3;
-  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif; font-size: 13px;
-}
-.lab-header {
-  display: flex; align-items: center; gap: 10px;
-  padding: 0 16px; height: 42px; background: #161b22; border-bottom: 1px solid #30363d;
-}
-.lab-title { font-weight: 600; font-size: 13px; }
-.lab-sep { width: 1px; height: 18px; background: #30363d; }
-.lab-subtitle { font-size: 12px; color: #8b949e; }
+.lab { display: flex; flex-direction: column; height: 100vh; background: #0e1117; color: #e6edf3; font-family: 'IBM Plex Sans', -apple-system, sans-serif; font-size: 13px; }
+.lab-header { display: flex; align-items: center; gap: 10px; padding: 0 16px; height: 42px; background: #161b22; border-bottom: 1px solid #30363d; }
+.lab-title { font-weight: 600; } .lab-sep { width: 1px; height: 18px; background: #30363d; } .lab-sub { font-size: 12px; color: #8b949e; }
 .lab-body { display: flex; flex: 1; overflow: hidden; }
-
-/* ── Controls ── */
-.controls {
-  width: 240px; background: #161b22; border-right: 1px solid #30363d;
-  overflow-y: auto; padding: 12px; flex-shrink: 0;
-}
-.ctrl-section { margin-bottom: 16px; }
-.ctrl-heading {
-  font-size: 10px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.07em; color: #656d76; margin-bottom: 6px;
-}
-
-.mode-btn {
-  display: flex; align-items: flex-start; gap: 8px; width: 100%;
-  padding: 8px 10px; margin-bottom: 4px;
-  background: #1c2129; border: 1px solid #30363d; border-radius: 6px;
-  color: #e6edf3; cursor: pointer; transition: all 0.12s; text-align: left;
-  font-family: inherit;
-}
-.mode-btn:hover { border-color: #58a6ff; background: #21262d; }
+.controls { width: 240px; background: #161b22; border-right: 1px solid #30363d; overflow-y: auto; padding: 12px; flex-shrink: 0; }
+.ctrl-section { margin-bottom: 14px; }
+.ctrl-heading { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: #656d76; margin-bottom: 6px; }
+.mode-btn { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 8px 10px; margin-bottom: 4px; background: #1c2129; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; cursor: pointer; text-align: left; font-family: inherit; transition: all 0.12s; }
+.mode-btn:hover { border-color: #58a6ff; }
 .mode-btn.active { border-color: #58a6ff; background: rgba(88,166,255,0.1); box-shadow: 0 0 0 1px #58a6ff; }
-.mode-icon { font-size: 16px; line-height: 1; margin-top: 1px; }
-.mode-info { display: flex; flex-direction: column; gap: 2px; }
-.mode-name { font-size: 12px; font-weight: 600; }
-.mode-desc { font-size: 10px; color: #8b949e; line-height: 1.3; }
-
-.ctrl-toggle {
-  display: flex; align-items: center; gap: 6px; padding: 4px 0; cursor: pointer;
-  font-size: 12px; color: #8b949e;
-}
+.mode-icon { font-size: 16px; } .mode-info { display: flex; flex-direction: column; gap: 2px; } .mode-name { font-size: 12px; font-weight: 600; } .mode-desc { font-size: 10px; color: #8b949e; }
+.ctrl-toggle { display: flex; align-items: center; gap: 6px; padding: 3px 0; cursor: pointer; font-size: 12px; color: #8b949e; }
 .ctrl-toggle input { accent-color: #58a6ff; }
-
-.instructions {
-  font-size: 11px; color: #8b949e; line-height: 1.6;
-  padding: 8px; background: #1c2129; border: 1px solid #30363d; border-radius: 6px;
-}
+.instructions { font-size: 11px; color: #8b949e; line-height: 1.6; padding: 8px; background: #1c2129; border: 1px solid #30363d; border-radius: 6px; }
 .instructions :deep(b) { color: #e6edf3; }
-.instructions :deep(br) { display: block; margin: 4px 0; }
-
-.conn-item {
-  display: flex; align-items: center; gap: 4px;
-  padding: 4px 6px; margin-bottom: 2px; border-radius: 4px;
-  font-size: 10px; font-family: 'IBM Plex Mono', monospace; cursor: pointer;
-  background: #1c2129; border: 1px solid transparent;
-}
-.conn-item:hover { border-color: #30363d; }
-.conn-item.selected { border-color: #58a6ff; background: rgba(88,166,255,0.08); }
-.conn-label { color: #8b949e; }
-.conn-arrow { color: #656d76; }
-.conn-wp { color: #656d76; margin-left: auto; }
-.conn-del {
-  background: none; border: none; color: #656d76; font-size: 14px; cursor: pointer;
-  padding: 0 2px; line-height: 1;
-}
-.conn-del:hover { color: #f85149; }
-.conn-empty { font-size: 11px; color: #656d76; padding: 8px 0; }
-
-.action-btn {
-  width: 100%; padding: 6px 10px; margin-bottom: 4px;
-  background: #21262d; border: 1px solid #30363d; color: #e6edf3;
-  font-size: 11px; font-family: inherit; border-radius: 4px; cursor: pointer;
-}
-.action-btn:hover { background: #282e36; border-color: #3d444d; }
-
-/* ── Canvas ── */
+.conn-item { display: flex; align-items: center; gap: 4px; padding: 4px 6px; margin-bottom: 2px; border-radius: 4px; font-size: 10px; font-family: monospace; cursor: pointer; background: #1c2129; border: 1px solid transparent; }
+.conn-item:hover { border-color: #30363d; } .conn-item.selected { border-color: #58a6ff; background: rgba(88,166,255,0.08); }
+.cl { color: #8b949e; } .ca { color: #656d76; } .cw { color: #656d76; margin-left: auto; }
+.cd { background: none; border: none; color: #656d76; font-size: 14px; cursor: pointer; padding: 0 2px; } .cd:hover { color: #f85149; }
+.conn-empty { font-size: 11px; color: #656d76; padding: 6px 0; }
+.action-btn { width: 100%; padding: 6px 10px; margin-bottom: 4px; background: #21262d; border: 1px solid #30363d; color: #e6edf3; font-size: 11px; font-family: inherit; border-radius: 4px; cursor: pointer; } .action-btn:hover { background: #282e36; }
 .canvas-area { flex: 1; position: relative; overflow: hidden; }
 .canvas-svg { width: 100%; height: 100%; display: block; outline: none; cursor: crosshair; }
-
-.n-label { font-size: 10px; font-weight: 600; fill: #e6edf3; font-family: 'IBM Plex Sans', sans-serif; }
-.tank-text { font-size: 13px; font-weight: 700; fill: #e6edf3; font-family: 'IBM Plex Mono', monospace; }
-.sensor-val { font-size: 9px; font-weight: 600; fill: #e6edf3; font-family: 'IBM Plex Mono', monospace; }
-.sensor-unit { font-size: 7px; fill: #8b949e; font-family: 'IBM Plex Mono', monospace; }
-
-.port-dot { cursor: pointer; transition: all 0.12s; }
-.port-dot:hover { r: 6; }
-
 .node-group { cursor: pointer; }
-.node-group:hover { filter: brightness(1.1); }
-
-.wp-handle { cursor: grab; transition: all 0.1s; }
-.wp-handle:hover { r: 6; stroke-width: 2; }
-
-.flow-anim { animation: flowAnim 1.2s linear infinite; }
-@keyframes flowAnim { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -28; } }
-
-.rotating { animation: rotate 2s linear infinite; }
-@keyframes rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-
-.mode-badge {
-  position: absolute; top: 10px; left: 10px;
-  padding: 4px 10px; border-radius: 4px; font-size: 10px; font-weight: 600;
-  letter-spacing: 0.06em; pointer-events: none;
-}
+.port-target { cursor: pointer; transition: all 0.15s; } .port-target:hover, .port-target.highlighted { fill: rgba(88,166,255,0.2); stroke: #58a6ff; stroke-width: 2; } .port-target.snapping { fill: rgba(63,185,80,0.25); stroke: #3fb950; stroke-width: 2; }
+.wp-handle { cursor: grab; transition: all 0.1s; } .wp-handle:hover { r: 6; }
+.pulse { animation: p1 1.5s ease-out infinite; } .pulse-green { animation: p2 1s ease-out infinite; }
+@keyframes p1 { 0% { r: 6; opacity: 0.6; } 100% { r: 14; opacity: 0; } }
+@keyframes p2 { 0% { r: 10; opacity: 0.7; } 100% { r: 18; opacity: 0; } }
+.mode-badge { position: absolute; top: 10px; left: 10px; padding: 4px 10px; border-radius: 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.06em; pointer-events: none; }
 .mode-badge.auto { background: rgba(188,140,255,0.15); color: #bc8cff; border: 1px solid rgba(188,140,255,0.3); }
 .mode-badge.click { background: rgba(88,166,255,0.15); color: #58a6ff; border: 1px solid rgba(88,166,255,0.3); }
 .mode-badge.ortho { background: rgba(63,185,80,0.15); color: #3fb950; border: 1px solid rgba(63,185,80,0.3); }
-
-.draw-status {
-  position: absolute; bottom: 10px; left: 10px; right: 10px;
-  padding: 6px 12px; background: #161b22; border: 1px solid #30363d;
-  border-radius: 6px; font-size: 11px; color: #8b949e;
-  display: flex; align-items: center; gap: 6px;
-}
-.draw-status strong { color: #e6edf3; font-weight: 500; }
-.draw-status em { color: #656d76; font-style: normal; }
-.draw-status-dot {
-  width: 6px; height: 6px; background: #58a6ff; border-radius: 50%;
-  animation: pulse 1.5s infinite;
-}
-@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
-
-.cancel-link {
-  background: none; border: none; color: #f85149; font-family: inherit;
-  font-size: 11px; cursor: pointer; padding: 0; text-decoration: underline;
-}
+.draw-status { position: absolute; bottom: 10px; left: 10px; right: 10px; padding: 6px 12px; background: #161b22; border: 1px solid #30363d; border-radius: 6px; font-size: 11px; color: #8b949e; display: flex; align-items: center; gap: 6px; }
+.draw-status strong { color: #e6edf3; }
+.dot { width: 6px; height: 6px; background: #58a6ff; border-radius: 50%; animation: blink 1.5s infinite; }
+@keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+.cancel-link { background: none; border: none; color: #f85149; font-family: inherit; font-size: 11px; cursor: pointer; text-decoration: underline; }
 </style>
