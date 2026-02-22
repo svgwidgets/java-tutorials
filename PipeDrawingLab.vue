@@ -1,20 +1,16 @@
 <template>
   <!--
-    Pipe Drawing Lab v3 — Real Library Components, No Overlays
-    ===========================================================
-    
-    Key changes from previous version:
-    1. Uses Vue <component :is> instead of v-if/else-if chain
-    2. Port interaction via library's own @port-click / @port-mouse-enter / @port-mouse-leave
-       (no invisible overlay circles — your PortIndicator handles everything)
-    3. Fixed snapping: first/last waypoints align to port axis so ortho lines stay straight
-    4. Port positions are NEVER snapped — only intermediate waypoints snap to grid
+    Pipe Drawing Lab v4
+    ====================
+    Port positions read directly from component instances via defineExpose.
+    No portsForType(). No hardcoded radius. No registry sync issues.
+    The component IS the source of truth for its own ports.
   -->
   <div class="lab">
     <header class="lab-header">
       <span class="lab-title">⬡ Pipe Drawing Lab</span>
       <span class="lab-sep" />
-      <span class="lab-sub">Orthogonal + Free Draw · Library Components</span>
+      <span class="lab-sub">Orthogonal + Free Draw · Port positions from components</span>
     </header>
 
     <div class="lab-body">
@@ -83,6 +79,14 @@
 
           <rect x="0" y="0" :width="canvasW" :height="canvasH" fill="url(#lg)" />
 
+          <!-- Alignment guides while drawing -->
+          <g v-if="draw.active && mousePos">
+            <line :x1="lastAnchor.x" y1="0" :x2="lastAnchor.x" :y2="canvasH"
+                  stroke="rgba(88,166,255,0.08)" stroke-width="0.5" stroke-dasharray="4 4" />
+            <line x1="0" :y1="lastAnchor.y" :x2="canvasW" :y2="lastAnchor.y"
+                  stroke="rgba(88,166,255,0.08)" stroke-width="0.5" stroke-dasharray="4 4" />
+          </g>
+
           <!-- ═══ FINISHED CONNECTIONS ═══ -->
           <g v-for="conn in connections" :key="conn.id" @click.stop="selectedConnId = conn.id">
             <!-- Selection glow -->
@@ -92,7 +96,7 @@
             <!-- Hit area -->
             <path :d="buildPath(conn)" fill="none" stroke="transparent" stroke-width="14"
               style="pointer-events:stroke;cursor:pointer" />
-            <!-- Actual pipe — YOUR ConnectionPipe component -->
+            <!-- YOUR ConnectionPipe -->
             <ConnectionPipe
               :start-position="portWorldPos(conn.from.nodeId, conn.from.portId)"
               :end-position="portWorldPos(conn.to.nodeId, conn.to.portId)"
@@ -110,39 +114,32 @@
             </g>
           </g>
 
-          <!-- ═══ PREVIEW (while drawing) ═══ -->
+          <!-- ═══ PREVIEW PIPE (while drawing) ═══ -->
           <g v-if="draw.active">
-            <!-- Committed segments -->
             <ConnectionPipe v-if="draw.waypoints.length > 0"
               :start-position="draw.startPos"
               :end-position="draw.waypoints[draw.waypoints.length - 1]"
               :waypoints="draw.waypoints.slice(0, -1)"
               :flowing="false" />
-            <!-- Rubber-band -->
             <path v-if="rubberBand" :d="rubberBand" fill="none" stroke="#58a6ff" stroke-width="2"
               stroke-dasharray="6 4" stroke-linecap="round" stroke-linejoin="round" opacity="0.5" />
-            <!-- Start pulse -->
             <circle :cx="draw.startPos.x" :cy="draw.startPos.y" r="6"
               fill="none" stroke="#58a6ff" stroke-width="1.5" class="pulse" />
           </g>
 
-          <!-- ═══ COMPONENTS (dynamic, using <component :is>) ═══ -->
+          <!-- ═══ COMPONENTS ═══ -->
           <g v-for="node in nodes" :key="node.id"
             :transform="`translate(${node.position.x}, ${node.position.y})`"
             class="node-group">
-            <!--
-              <component :is> resolves the Vue component from componentMap.
-              All props your components accept are spread from node.props.
-              Port events come from YOUR PortIndicator inside the component.
-            -->
             <component
               :is="componentMap[node.typeId]"
+              :ref="(el: any) => setCompRef(node.id, el)"
               v-bind="node.props"
               :label="node.label"
               :show-label="true"
               :show-ports="showPorts"
               :highlighted-port-id="getHighlightedPort(node.id)"
-              @port-click="(portId: string, event: MouseEvent) => onPortClick(node.id, portId)"
+              @port-click="(portId: string) => onPortClick(node.id, portId)"
               @port-mouse-enter="(portId: string) => onPortEnter(node.id, portId)"
               @port-mouse-leave="(portId: string) => onPortLeave(node.id, portId)"
               @click="selectedConnId = null"
@@ -154,10 +151,8 @@
             r="10" fill="none" stroke="#3fb950" stroke-width="2" class="pulse-green" />
         </svg>
 
-        <!-- Mode badge -->
         <div class="mode-badge" :class="drawingMode">{{ drawingMode.toUpperCase() }}</div>
 
-        <!-- Drawing status -->
         <div v-if="draw.active" class="draw-status">
           <span class="dot" />
           From <strong>{{ draw.fromNodeId }}:{{ draw.fromPortId }}</strong>
@@ -170,40 +165,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted, type Component, markRaw } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, type Component, markRaw, nextTick } from 'vue'
 
 // ═══════════════════════════════════════════════
 //  YOUR LIBRARY IMPORTS
-//  Adjust paths to match your project.
 // ═══════════════════════════════════════════════
 
 import ManualValve from '@/lib/components/PID/valves/ManualValve.vue'
-import CentrifugalPump from '@/lib/components/PID/pumps/CentrifugalPump.vue'
+import CentrifugalPump from '@/lib/components/PID/pumps/GeneralPump.vue'
 import VerticalTank from '@/lib/components/PID/tanks/VerticalTank.vue'
 import PressureSensor from '@/lib/components/PID/sensors/PressureSensor.vue'
 import ConnectionPipe from '@/lib/components/PID/connectors/ConnectionPipe.vue'
 
-import {
-  calculateManualValvePorts,
-  calculateTankPorts,
-  calculateCirclePorts,
-} from '@/lib/utils/positions'
-
-import {
-  MANUAL_VALVE_DEFAULT_DIMENSIONS,
-  TANK_DEFAULT_DIMENSIONS,
-} from '@/lib/constants'
-
 import type { PortDefinition, Position } from '@/lib/types'
 
 // ═══════════════════════════════════════════════
-//  COMPONENT MAP (replaces v-if/else-if chain)
+//  COMPONENT MAP
 // ═══════════════════════════════════════════════
-//
-//  Maps typeId → Vue component. markRaw prevents Vue
-//  from making the component constructor reactive.
-//  To add a new component type, add one line here.
-//
 
 const componentMap: Record<string, Component> = {
   'manual-valve': markRaw(ManualValve),
@@ -213,34 +191,54 @@ const componentMap: Record<string, Component> = {
 }
 
 // ═══════════════════════════════════════════════
-//  PORT REGISTRY
+//  COMPONENT REFS — the single source of truth
+//
+//  Each component exposes { ports } via defineExpose.
+//  We read ports directly from the mounted instance.
+//  No registry, no hardcoded dimensions, no sync issues.
 // ═══════════════════════════════════════════════
 
-// Adjust these if your pump/sensor have dedicated port calculators
-const PUMP_RADIUS = 18
-const SENSOR_RADIUS = 14
+const compRefs = ref<Record<string, any>>({})
 
-function portsForType(typeId: string): PortDefinition[] {
-  switch (typeId) {
-    case 'manual-valve':
-      return calculateManualValvePorts(MANUAL_VALVE_DEFAULT_DIMENSIONS.width, MANUAL_VALVE_DEFAULT_DIMENSIONS.height)
-    case 'vertical-tank':
-      return calculateTankPorts(TANK_DEFAULT_DIMENSIONS.width, TANK_DEFAULT_DIMENSIONS.height)
-    case 'centrifugal-pump':
-      return calculateCirclePorts(PUMP_RADIUS)
-    case 'pressure-sensor':
-      return calculateCirclePorts(SENSOR_RADIUS)
-    default:
-      return []
+function setCompRef(nodeId: string, el: any) {
+  if (el) {
+    compRefs.value[nodeId] = el
+  } else {
+    delete compRefs.value[nodeId]
   }
 }
 
+/**
+ * Read port positions from the actual component instance.
+ * Falls back gracefully if ref not yet mounted.
+ */
+function getExposedPorts(nodeId: string): PortDefinition[] {
+  const comp = compRefs.value[nodeId]
+  if (!comp) return []
+  // ports is a computed ref exposed via defineExpose
+  // Access .value if it's a ref, otherwise use directly
+  const ports = comp.ports
+  if (!ports) return []
+  return Array.isArray(ports) ? ports : (ports.value ?? [])
+}
+
+/**
+ * Get a specific port's world position.
+ * Port local coords come from the component itself.
+ * World = node.position + port local position.
+ */
 function portWorldPos(nodeId: string, portId: string): Position {
   const node = nodes.find(n => n.id === nodeId)
   if (!node) return { x: 0, y: 0 }
-  const port = portsForType(node.typeId).find(p => p.id === portId)
+
+  const ports = getExposedPorts(nodeId)
+  const port = ports.find(p => p.id === portId)
   if (!port) return node.position
-  return { x: node.position.x + port.x, y: node.position.y + port.y }
+
+  return {
+    x: node.position.x + port.x,
+    y: node.position.y + port.y,
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -287,8 +285,8 @@ const draw = reactive({
 const wpDrag = reactive({ active: false, connId: '', idx: -1 })
 
 const modes = [
-  { id: 'ortho' as DrawMode, icon: '⊾', name: 'Ortho Draw', desc: 'H/V segments only. Clean right angles.' },
-  { id: 'click' as DrawMode, icon: '✎', name: 'Free Draw', desc: 'Place waypoints at any angle.' },
+  { id: 'ortho' as DrawMode, icon: '⊾', name: 'Ortho Draw', desc: 'H/V segments only.' },
+  { id: 'click' as DrawMode, icon: '✎', name: 'Free Draw', desc: 'Waypoints at any angle.' },
 ]
 
 const nodes = reactive<NodeData[]>([
@@ -304,100 +302,66 @@ const connections = reactive<ConnData[]>([])
 
 // ═══════════════════════════════════════════════
 //  PORT HIGHLIGHTING
-//  Your PortIndicator accepts highlightedPortId prop.
-//  We tell each component which port to highlight.
 // ═══════════════════════════════════════════════
 
 function getHighlightedPort(nodeId: string): string | undefined {
-  // Highlight hovered port
   if (hoveredPort.value?.nodeId === nodeId) return hoveredPort.value.portId
-  // Highlight start port while drawing
   if (draw.active && draw.fromNodeId === nodeId) return draw.fromPortId
-  // Highlight snap target
   if (snapTarget.value?.nodeId === nodeId) return snapTarget.value.portId
   return undefined
 }
 
 // ═══════════════════════════════════════════════
-//  SNAP LOGIC (THE FIX)
+//  SNAP LOGIC
 //
-//  Problem: ports sit at positions like (20, 12) which
-//  don't align to a 10px grid. If waypoints snap to grid,
-//  the segment from port → first waypoint is diagonal.
-//
-//  Fix: snapForOrtho() ensures the first waypoint after
-//  a port shares one axis with the port (so the segment
-//  is perfectly H or V), and only snaps the OTHER axis.
-//
-//  For intermediate waypoints, normal grid snap is fine.
+//  Port positions are NEVER snapped.
+//  Only intermediate waypoints snap to grid.
+//  In ortho mode, first waypoint aligns to port axis
+//  so the segment is always perfectly H or V.
 // ═══════════════════════════════════════════════
 
-function snapToGrid(p: Position): Position {
+function snapGrid(p: Position): Position {
   if (!snapEnabled.value) return p
   const g = gridSize.value
   return { x: Math.round(p.x / g) * g, y: Math.round(p.y / g) * g }
 }
 
-/**
- * Snap for orthogonal drawing.
- * `anchor` is the previous point (port or last waypoint).
- * We determine if the user is drawing more horizontally or vertically,
- * then lock the shared axis to the anchor and snap only the free axis.
- * This guarantees every segment is perfectly H or V.
- */
 function snapOrtho(raw: Position, anchor: Position): { corner: Position | null; point: Position } {
   const dx = Math.abs(raw.x - anchor.x)
   const dy = Math.abs(raw.y - anchor.y)
 
-  // If roughly aligned on one axis, make a single straight segment
   if (dx < 5) {
-    // Nearly vertical — lock X to anchor
     const y = snapEnabled.value ? Math.round(raw.y / gridSize.value) * gridSize.value : raw.y
     return { corner: null, point: { x: anchor.x, y } }
   }
   if (dy < 5) {
-    // Nearly horizontal — lock Y to anchor
     const x = snapEnabled.value ? Math.round(raw.x / gridSize.value) * gridSize.value : raw.x
     return { corner: null, point: { x, y: anchor.y } }
   }
 
-  // Diagonal movement — create an L-shape (horizontal first, then vertical)
-  // The corner point shares Y with anchor, X with target (snapped)
   const sx = snapEnabled.value ? Math.round(raw.x / gridSize.value) * gridSize.value : raw.x
   const sy = snapEnabled.value ? Math.round(raw.y / gridSize.value) * gridSize.value : raw.y
-  const corner: Position = { x: sx, y: anchor.y }
-  const point: Position = { x: sx, y: sy }
-  return { corner, point }
+  return { corner: { x: sx, y: anchor.y }, point: { x: sx, y: sy } }
 }
 
-/**
- * When finishing a pipe at a target port, add alignment waypoints
- * so the last segment arrives perfectly H or V at the port.
- */
 function alignToTargetPort(waypoints: Position[], startPos: Position, targetPos: Position): Position[] {
   const wp = [...waypoints]
-  const lastPt = wp.length > 0 ? wp[wp.length - 1] : startPos
-
-  // If already aligned on one axis, no extra waypoint needed
-  if (Math.abs(lastPt.x - targetPos.x) < 2 || Math.abs(lastPt.y - targetPos.y) < 2) {
-    return wp
-  }
-
-  // Add a corner so we arrive orthogonally
-  // Horizontal then vertical approach
-  wp.push({ x: targetPos.x, y: lastPt.y })
+  const last = wp.length > 0 ? wp[wp.length - 1] : startPos
+  if (Math.abs(last.x - targetPos.x) < 2 || Math.abs(last.y - targetPos.y) < 2) return wp
+  wp.push({ x: targetPos.x, y: last.y })
   return wp
 }
 
 // ═══════════════════════════════════════════════
-//  SNAP TARGET (port proximity detection)
+//  SNAP TARGET (port proximity during drawing)
 // ═══════════════════════════════════════════════
 
 const snapTarget = computed<{ nodeId: string; portId: string; world: Position } | null>(() => {
   if (!draw.active || !mousePos.value) return null
   const DIST = 18
   for (const node of nodes) {
-    for (const port of portsForType(node.typeId)) {
+    const ports = getExposedPorts(node.id)
+    for (const port of ports) {
       if (node.id === draw.fromNodeId && port.id === draw.fromPortId) continue
       const w = { x: node.position.x + port.x, y: node.position.y + port.y }
       if (Math.hypot(w.x - mousePos.value.x, w.y - mousePos.value.y) < DIST) {
@@ -409,24 +373,23 @@ const snapTarget = computed<{ nodeId: string; portId: string; world: Position } 
 })
 
 // ═══════════════════════════════════════════════
-//  RUBBER BAND PREVIEW
+//  RUBBER BAND
 // ═══════════════════════════════════════════════
+
+const lastAnchor = computed(() => {
+  if (!draw.active) return { x: 0, y: 0 }
+  return draw.waypoints.length > 0 ? draw.waypoints[draw.waypoints.length - 1] : draw.startPos
+})
 
 const rubberBand = computed(() => {
   if (!draw.active || !mousePos.value) return ''
-  const anchor = draw.waypoints.length > 0
-    ? draw.waypoints[draw.waypoints.length - 1]
-    : draw.startPos
+  const anchor = lastAnchor.value
   const target = snapTarget.value ? snapTarget.value.world : mousePos.value
 
   if (drawingMode.value === 'ortho') {
-    // Show the L-shape preview the user would get
     const { corner, point } = snapOrtho(target, anchor)
     const dest = snapTarget.value ? snapTarget.value.world : point
-    if (corner && Math.abs(corner.x - anchor.x) > 1 && Math.abs(corner.y - anchor.y) > 1) {
-      // Corner is distinct from both anchor and dest
-      return `M ${anchor.x} ${anchor.y} L ${corner.x} ${corner.y} L ${dest.x} ${dest.y}`
-    }
+    if (corner) return `M ${anchor.x} ${anchor.y} L ${corner.x} ${corner.y} L ${dest.x} ${dest.y}`
     return `M ${anchor.x} ${anchor.y} L ${dest.x} ${dest.y}`
   }
 
@@ -435,12 +398,12 @@ const rubberBand = computed(() => {
 
 const instructions = computed(() => {
   if (!draw.active) return '<b>Click any port</b> to start drawing a pipe.'
-  if (drawingMode.value === 'ortho') return '<b>Click</b> to place H/V segment. <b>Click port</b> to finish. <b>Esc</b> to cancel.'
-  return '<b>Click</b> to place waypoint. <b>Click port</b> to finish. <b>Esc</b> to cancel.'
+  if (drawingMode.value === 'ortho') return '<b>Click</b> = H/V segment. <b>Click port</b> = finish. <b>Esc</b> = cancel.'
+  return '<b>Click</b> = waypoint. <b>Click port</b> = finish. <b>Esc</b> = cancel.'
 })
 
 // ═══════════════════════════════════════════════
-//  PATH BUILDER (for hit area / selection glow)
+//  PATH BUILDER
 // ═══════════════════════════════════════════════
 
 function buildPath(conn: ConnData): string {
@@ -450,7 +413,7 @@ function buildPath(conn: ConnData): string {
 }
 
 // ═══════════════════════════════════════════════
-//  SVG COORDINATE CONVERSION
+//  SVG COORDINATES
 // ═══════════════════════════════════════════════
 
 function toSvg(e: MouseEvent): Position {
@@ -467,10 +430,8 @@ function toSvg(e: MouseEvent): Position {
 //  EVENT HANDLERS
 // ═══════════════════════════════════════════════
 
-// Port events from YOUR library's PortIndicator
 function onPortClick(nodeId: string, portId: string) {
   if (!draw.active) {
-    // START drawing
     const pos = portWorldPos(nodeId, portId)
     draw.active = true
     draw.fromNodeId = nodeId
@@ -481,25 +442,20 @@ function onPortClick(nodeId: string, portId: string) {
     return
   }
 
-  // FINISH drawing — clicked a target port
   if (nodeId === draw.fromNodeId && portId === draw.fromPortId) return
 
   let wp = [...draw.waypoints]
   const targetPos = portWorldPos(nodeId, portId)
 
-  // Ensure last segment arrives orthogonally at target port
   if (drawingMode.value === 'ortho') {
     wp = alignToTargetPort(wp, draw.startPos, targetPos)
   }
-
-  // Remove collinear points
-  wp = simplify(wp)
 
   connections.push({
     id: `conn-${++connCtr}`,
     from: { nodeId: draw.fromNodeId, portId: draw.fromPortId },
     to: { nodeId, portId },
-    waypoints: wp,
+    waypoints: simplify(wp),
     props: { flowing: true, direction: 'forward' },
   })
   selectedConnId.value = `conn-${connCtr}`
@@ -509,44 +465,36 @@ function onPortClick(nodeId: string, portId: string) {
 function onPortEnter(nodeId: string, portId: string) {
   hoveredPort.value = { nodeId, portId }
 }
-
 function onPortLeave(_nodeId: string, _portId: string) {
   hoveredPort.value = null
 }
 
 function onCanvasClick(e: MouseEvent) {
-  if (!draw.active) {
-    selectedConnId.value = null
-    return
-  }
+  if (!draw.active) { selectedConnId.value = null; return }
 
-  // If near a port, treat as port click
   if (snapTarget.value) {
     onPortClick(snapTarget.value.nodeId, snapTarget.value.portId)
     return
   }
 
   const raw = toSvg(e)
-  const anchor = draw.waypoints.length > 0 ? draw.waypoints[draw.waypoints.length - 1] : draw.startPos
+  const anchor = lastAnchor.value
 
   if (drawingMode.value === 'ortho') {
     const { corner, point } = snapOrtho(raw, anchor)
     if (corner) draw.waypoints.push(corner)
     draw.waypoints.push(point)
   } else {
-    // Free draw — snap entire point to grid
-    draw.waypoints.push(snapToGrid(raw))
+    draw.waypoints.push(snapGrid(raw))
   }
 }
 
 function onMouseMove(e: MouseEvent) {
-  const raw = toSvg(e)
-  mousePos.value = raw // Keep raw for rubber-band accuracy
-
+  mousePos.value = toSvg(e)
   if (wpDrag.active) {
     const conn = connections.find(c => c.id === wpDrag.connId)
     if (conn?.waypoints[wpDrag.idx]) {
-      conn.waypoints[wpDrag.idx] = snapToGrid(raw)
+      conn.waypoints[wpDrag.idx] = snapGrid(mousePos.value)
     }
   }
 }
@@ -569,7 +517,10 @@ function startWpDrag(connId: string, idx: number, e: MouseEvent) {
 
 function onGlobalMouseUp() { wpDrag.active = false }
 
-onMounted(() => { window.addEventListener('mouseup', onGlobalMouseUp); svgEl.value?.focus() })
+onMounted(() => {
+  window.addEventListener('mouseup', onGlobalMouseUp)
+  nextTick(() => svgEl.value?.focus())
+})
 onUnmounted(() => { window.removeEventListener('mouseup', onGlobalMouseUp) })
 
 // ═══════════════════════════════════════════════
