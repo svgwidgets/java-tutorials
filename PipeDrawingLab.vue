@@ -1,47 +1,45 @@
 <template>
   <!--
-    Pipe Drawing Lab — Uses Your Real Library Components
-    =====================================================
-    Drop into: src/demo/PipeDrawingLab.vue
+    Pipe Drawing Lab v3 — Real Library Components, No Overlays
+    ===========================================================
     
-    Imports your actual ManualValve, CentrifugalPump, VerticalTank,
-    PressureSensor, and ConnectionPipe. Zero changes to library needed.
-    
-    The editor adds ONLY interaction overlays on top:
-      - Invisible port hit-targets (larger click area)
-      - Waypoint drag handles
-      - Preview rubber-band line
+    Key changes from previous version:
+    1. Uses Vue <component :is> instead of v-if/else-if chain
+    2. Port interaction via library's own @port-click / @port-mouse-enter / @port-mouse-leave
+       (no invisible overlay circles — your PortIndicator handles everything)
+    3. Fixed snapping: first/last waypoints align to port axis so ortho lines stay straight
+    4. Port positions are NEVER snapped — only intermediate waypoints snap to grid
   -->
   <div class="lab">
     <header class="lab-header">
       <span class="lab-title">⬡ Pipe Drawing Lab</span>
       <span class="lab-sep" />
-      <span class="lab-sub">Real library components · Three drawing modes</span>
+      <span class="lab-sub">Orthogonal + Free Draw · Library Components</span>
     </header>
 
     <div class="lab-body">
+      <!-- ── Controls ── -->
       <aside class="controls">
         <div class="ctrl-section">
           <div class="ctrl-heading">Drawing Mode</div>
           <button v-for="m in modes" :key="m.id" class="mode-btn" :class="{ active: drawingMode === m.id }"
             @click="drawingMode = m.id; cancelDrawing()">
             <span class="mode-icon">{{ m.icon }}</span>
-            <div class="mode-info">
-              <span class="mode-name">{{ m.name }}</span>
-              <span class="mode-desc">{{ m.desc }}</span>
-            </div>
+            <div><span class="mode-name">{{ m.name }}</span><br /><span class="mode-desc">{{ m.desc }}</span></div>
           </button>
         </div>
+
         <div class="ctrl-section">
           <div class="ctrl-heading">Options</div>
-          <label class="ctrl-toggle"><input type="checkbox" v-model="snapToGrid" /><span>Snap to grid</span></label>
-          <label class="ctrl-toggle"><input type="checkbox" v-model="showPortDots" /><span>Show ports (PortIndicator)</span></label>
-          <label class="ctrl-toggle"><input type="checkbox" v-model="showGuides" /><span>Alignment guides</span></label>
+          <label class="ctrl-toggle"><input type="checkbox" v-model="snapEnabled" /><span>Snap to grid ({{ gridSize }}px)</span></label>
+          <label class="ctrl-toggle"><input type="checkbox" v-model="showPorts" /><span>Show ports</span></label>
         </div>
+
         <div class="ctrl-section">
           <div class="ctrl-heading">Instructions</div>
-          <div class="instructions" v-html="currentInstructions" />
+          <div class="instructions" v-html="instructions" />
         </div>
+
         <div class="ctrl-section">
           <div class="ctrl-heading">Connections ({{ connections.length }})</div>
           <div v-for="conn in connections" :key="conn.id" class="conn-item"
@@ -52,18 +50,27 @@
             <span class="cw">{{ conn.waypoints.length }}wp</span>
             <button class="cd" @click.stop="deleteConnection(conn.id)">×</button>
           </div>
-          <div v-if="!connections.length" class="conn-empty">Click a port to start drawing.</div>
+          <div v-if="!connections.length" class="conn-empty">Click a port to start.</div>
         </div>
+
         <div class="ctrl-section">
           <button class="action-btn" @click="resetAll">Clear All</button>
           <button class="action-btn" @click="exportJson">Export JSON</button>
         </div>
       </aside>
 
+      <!-- ── Canvas ── -->
       <div class="canvas-area">
-        <svg ref="svgEl" class="canvas-svg" :viewBox="`0 0 ${canvasW} ${canvasH}`"
-          @mousemove="handleMouseMove" @click="handleCanvasClick"
-          @contextmenu.prevent="cancelDrawing" @keydown.escape="cancelDrawing" tabindex="0">
+        <svg
+          ref="svgEl"
+          class="canvas-svg"
+          :viewBox="`0 0 ${canvasW} ${canvasH}`"
+          @mousemove="onMouseMove"
+          @click="onCanvasClick"
+          @contextmenu.prevent="cancelDrawing"
+          @keydown.escape="cancelDrawing"
+          tabindex="0"
+        >
           <defs>
             <pattern id="sg" :width="gridSize" :height="gridSize" patternUnits="userSpaceOnUse">
               <path :d="`M ${gridSize} 0 L 0 0 0 ${gridSize}`" fill="none" stroke="rgba(255,255,255,0.04)" stroke-width="0.5" />
@@ -73,103 +80,88 @@
               <path :d="`M ${gridSize*5} 0 L 0 0 0 ${gridSize*5}`" fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="0.5" />
             </pattern>
           </defs>
+
           <rect x="0" y="0" :width="canvasW" :height="canvasH" fill="url(#lg)" />
 
-          <!-- Alignment guides -->
-          <g v-if="showGuides && drawState.isDrawing && mousePos">
-            <line :x1="drawState.lastPoint.x" y1="0" :x2="drawState.lastPoint.x" :y2="canvasH" stroke="rgba(88,166,255,0.1)" stroke-width="0.5" stroke-dasharray="4 4" />
-            <line x1="0" :y1="drawState.lastPoint.y" :x2="canvasW" :y2="drawState.lastPoint.y" stroke="rgba(88,166,255,0.1)" stroke-width="0.5" stroke-dasharray="4 4" />
-          </g>
-
           <!-- ═══ FINISHED CONNECTIONS ═══ -->
-          <g v-for="conn in connections" :key="conn.id"
-            :class="{ 'conn-sel': selectedConnId === conn.id }" @click.stop="selectedConnId = conn.id">
-            <!-- Selection glow + hit area (editor overlay) -->
-            <path v-if="selectedConnId === conn.id" :d="makePath(conn)" fill="none" stroke="rgba(88,166,255,0.25)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
-            <path :d="makePath(conn)" fill="none" stroke="transparent" stroke-width="14" style="pointer-events:stroke;cursor:pointer" />
-            <!-- YOUR LIBRARY: ConnectionPipe — used as-is -->
+          <g v-for="conn in connections" :key="conn.id" @click.stop="selectedConnId = conn.id">
+            <!-- Selection glow -->
+            <path v-if="selectedConnId === conn.id" :d="buildPath(conn)"
+              fill="none" stroke="rgba(88,166,255,0.25)" stroke-width="8"
+              stroke-linecap="round" stroke-linejoin="round" />
+            <!-- Hit area -->
+            <path :d="buildPath(conn)" fill="none" stroke="transparent" stroke-width="14"
+              style="pointer-events:stroke;cursor:pointer" />
+            <!-- Actual pipe — YOUR ConnectionPipe component -->
             <ConnectionPipe
-              :start-position="getPortWorld(conn.from.nodeId, conn.from.portId)"
-              :end-position="getPortWorld(conn.to.nodeId, conn.to.portId)"
+              :start-position="portWorldPos(conn.from.nodeId, conn.from.portId)"
+              :end-position="portWorldPos(conn.to.nodeId, conn.to.portId)"
               :waypoints="conn.waypoints"
               :flowing="conn.props.flowing"
               :direction="conn.props.direction"
             />
-            <!-- Waypoint handles (editor overlay, shown when selected) -->
+            <!-- Waypoint handles when selected -->
             <g v-if="selectedConnId === conn.id">
-              <circle v-for="(wp, i) in conn.waypoints" :key="i" :cx="wp.x" :cy="wp.y" r="4"
+              <circle v-for="(wp, i) in conn.waypoints" :key="i"
+                :cx="wp.x" :cy="wp.y" r="4"
                 fill="#0e1117" stroke="#58a6ff" stroke-width="1.5" class="wp-handle"
                 @mousedown.stop="startWpDrag(conn.id, i, $event)"
                 @dblclick.stop="conn.waypoints.splice(i, 1)" />
             </g>
           </g>
 
-          <!-- ═══ PREVIEW PIPE (drawing in progress) ═══ -->
-          <g v-if="drawState.isDrawing">
-            <!-- Already committed segments — use your ConnectionPipe -->
-            <ConnectionPipe v-if="drawState.waypoints.length > 0"
-              :start-position="drawState.startPortWorldPos"
-              :end-position="drawState.waypoints[drawState.waypoints.length - 1]"
-              :waypoints="drawState.waypoints.slice(0, -1)"
-              :flowing="false"
-            />
-            <!-- Rubber-band to mouse (editor-only, dashed preview) -->
-            <path v-if="rubberPath" :d="rubberPath" fill="none" stroke="#58a6ff" stroke-width="2"
+          <!-- ═══ PREVIEW (while drawing) ═══ -->
+          <g v-if="draw.active">
+            <!-- Committed segments -->
+            <ConnectionPipe v-if="draw.waypoints.length > 0"
+              :start-position="draw.startPos"
+              :end-position="draw.waypoints[draw.waypoints.length - 1]"
+              :waypoints="draw.waypoints.slice(0, -1)"
+              :flowing="false" />
+            <!-- Rubber-band -->
+            <path v-if="rubberBand" :d="rubberBand" fill="none" stroke="#58a6ff" stroke-width="2"
               stroke-dasharray="6 4" stroke-linecap="round" stroke-linejoin="round" opacity="0.5" />
             <!-- Start pulse -->
-            <circle :cx="drawState.startPortWorldPos.x" :cy="drawState.startPortWorldPos.y" r="6"
+            <circle :cx="draw.startPos.x" :cy="draw.startPos.y" r="6"
               fill="none" stroke="#58a6ff" stroke-width="1.5" class="pulse" />
           </g>
 
-          <!-- ═══ COMPONENTS (your library, rendered as-is) ═══ -->
-          <g v-for="node in nodes" :key="node.id">
+          <!-- ═══ COMPONENTS (dynamic, using <component :is>) ═══ -->
+          <g v-for="node in nodes" :key="node.id"
+            :transform="`translate(${node.position.x}, ${node.position.y})`"
+            class="node-group">
             <!--
-              Wrapper <g> positions the component on canvas.
-              Inside: your real component + invisible port hit-targets overlaid on top.
-              
-              The component handles its own rendering, ports, labels, colors.
-              We ONLY add larger invisible circles on top of each port
-              so the user has a bigger click target during pipe drawing.
+              <component :is> resolves the Vue component from componentMap.
+              All props your components accept are spread from node.props.
+              Port events come from YOUR PortIndicator inside the component.
             -->
-            <g :transform="`translate(${node.position.x}, ${node.position.y})`" class="node-group">
-
-              <!-- YOUR LIBRARY COMPONENT (rendered by type) -->
-              <ManualValve v-if="node.typeId === 'manual-valve'"
-                :state="node.props.state" :alarm="node.props.alarm || 'none'"
-                :label="node.label" :show-label="true" :show-ports="showPortDots" />
-
-              <CentrifugalPump v-else-if="node.typeId === 'centrifugal-pump'"
-                :state="node.props.state" :alarm="node.props.alarm || 'none'"
-                :label="node.label" :show-label="true" :show-ports="showPortDots" />
-
-              <VerticalTank v-else-if="node.typeId === 'vertical-tank'"
-                :level="node.props.level" :alarm="node.props.alarm || 'none'"
-                :label="node.label" :show-label="true" :show-ports="showPortDots" />
-
-              <PressureSensor v-else-if="node.typeId === 'pressure-sensor'"
-                :value="node.props.value" :alarm="node.props.alarm || 'none'"
-                :label="node.label" :show-label="true" :show-ports="showPortDots" />
-
-              <!-- EDITOR OVERLAY: port hit-targets (invisible, larger radius for easy clicking) -->
-              <circle v-for="port in getNodePorts(node)" :key="port.id"
-                :cx="port.x" :cy="port.y" r="8"
-                fill="transparent" class="port-target"
-                :class="{ highlighted: isPortHigh(node.id, port.id), snapping: isSnapTarget(node.id, port.id) }"
-                @click.stop="handlePortClick(node.id, port.id)"
-                @mouseenter="hovered = { n: node.id, p: port.id }"
-                @mouseleave="hovered = null" />
-            </g>
+            <component
+              :is="componentMap[node.typeId]"
+              v-bind="node.props"
+              :label="node.label"
+              :show-label="true"
+              :show-ports="showPorts"
+              :highlighted-port-id="getHighlightedPort(node.id)"
+              @port-click="(portId: string, event: MouseEvent) => onPortClick(node.id, portId)"
+              @port-mouse-enter="(portId: string) => onPortEnter(node.id, portId)"
+              @port-mouse-leave="(portId: string) => onPortLeave(node.id, portId)"
+              @click="selectedConnId = null"
+            />
           </g>
 
-          <!-- Snap indicator -->
-          <circle v-if="snapInfo" :cx="snapInfo.world.x" :cy="snapInfo.world.y" r="10"
-            fill="none" stroke="#3fb950" stroke-width="2" class="pulse-green" />
+          <!-- Snap target indicator -->
+          <circle v-if="snapTarget" :cx="snapTarget.world.x" :cy="snapTarget.world.y"
+            r="10" fill="none" stroke="#3fb950" stroke-width="2" class="pulse-green" />
         </svg>
 
+        <!-- Mode badge -->
         <div class="mode-badge" :class="drawingMode">{{ drawingMode.toUpperCase() }}</div>
-        <div v-if="drawState.isDrawing" class="draw-status">
-          <span class="dot" /> Drawing from <strong>{{ drawState.fromNodeId }}:{{ drawState.fromPortId }}</strong>
-          · {{ drawState.waypoints.length }}wp
+
+        <!-- Drawing status -->
+        <div v-if="draw.active" class="draw-status">
+          <span class="dot" />
+          From <strong>{{ draw.fromNodeId }}:{{ draw.fromPortId }}</strong>
+          · {{ draw.waypoints.length }}wp
           · <button class="cancel-link" @click="cancelDrawing">Cancel</button>
         </div>
       </div>
@@ -178,12 +170,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, type Component, markRaw } from 'vue'
 
 // ═══════════════════════════════════════════════
 //  YOUR LIBRARY IMPORTS
-//  Adjust paths to your project structure.
-//  ZERO changes to these components are needed.
+//  Adjust paths to match your project.
 // ═══════════════════════════════════════════════
 
 import ManualValve from '@/lib/components/PID/valves/ManualValve.vue'
@@ -206,18 +197,30 @@ import {
 import type { PortDefinition, Position } from '@/lib/types'
 
 // ═══════════════════════════════════════════════
-//  PORT LOOKUP
-//  Bridges your calculate*Ports() with editor needs.
-//  No library change — this lives in the editor.
+//  COMPONENT MAP (replaces v-if/else-if chain)
+// ═══════════════════════════════════════════════
+//
+//  Maps typeId → Vue component. markRaw prevents Vue
+//  from making the component constructor reactive.
+//  To add a new component type, add one line here.
+//
+
+const componentMap: Record<string, Component> = {
+  'manual-valve': markRaw(ManualValve),
+  'centrifugal-pump': markRaw(CentrifugalPump),
+  'vertical-tank': markRaw(VerticalTank),
+  'pressure-sensor': markRaw(PressureSensor),
+}
+
+// ═══════════════════════════════════════════════
+//  PORT REGISTRY
 // ═══════════════════════════════════════════════
 
-// NOTE: If your pump/sensor have their own calculate*Ports functions,
-// import and use those instead. These are reasonable defaults
-// based on what I saw in your positions.ts.
+// Adjust these if your pump/sensor have dedicated port calculators
 const PUMP_RADIUS = 18
 const SENSOR_RADIUS = 14
 
-function getPortsForType(typeId: string): PortDefinition[] {
+function portsForType(typeId: string): PortDefinition[] {
   switch (typeId) {
     case 'manual-valve':
       return calculateManualValvePorts(MANUAL_VALVE_DEFAULT_DIMENSIONS.width, MANUAL_VALVE_DEFAULT_DIMENSIONS.height)
@@ -232,209 +235,372 @@ function getPortsForType(typeId: string): PortDefinition[] {
   }
 }
 
+function portWorldPos(nodeId: string, portId: string): Position {
+  const node = nodes.find(n => n.id === nodeId)
+  if (!node) return { x: 0, y: 0 }
+  const port = portsForType(node.typeId).find(p => p.id === portId)
+  if (!port) return node.position
+  return { x: node.position.x + port.x, y: node.position.y + port.y }
+}
+
 // ═══════════════════════════════════════════════
-//  TYPES & STATE
+//  TYPES
 // ═══════════════════════════════════════════════
 
-interface NodeData { id: string; typeId: string; position: Position; label: string; props: Record<string, any> }
-interface ConnData {
-  id: string; from: { nodeId: string; portId: string }; to: { nodeId: string; portId: string }
-  waypoints: Position[]; props: { flowing: boolean; direction: string }
+interface NodeData {
+  id: string; typeId: string; position: Position; label: string
+  props: Record<string, any>
 }
-type DrawMode = 'auto' | 'click' | 'ortho'
+
+interface ConnData {
+  id: string
+  from: { nodeId: string; portId: string }
+  to: { nodeId: string; portId: string }
+  waypoints: Position[]
+  props: { flowing: boolean; direction: string }
+}
+
+type DrawMode = 'click' | 'ortho'
+
+// ═══════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════
 
 const canvasW = 900, canvasH = 500, gridSize = ref(10)
-const snapToGrid = ref(true), showPortDots = ref(true), showGuides = ref(true)
+const snapEnabled = ref(true)
+const showPorts = ref(true)
 const selectedConnId = ref<string | null>(null)
-const hovered = ref<{ n: string; p: string } | null>(null)
+const hoveredPort = ref<{ nodeId: string; portId: string } | null>(null)
 const mousePos = ref<Position | null>(null)
 const svgEl = ref<SVGSVGElement | null>(null)
-const drawingMode = ref<DrawMode>('click')
+const drawingMode = ref<DrawMode>('ortho')
 let connCtr = 0
 
-const drawState = reactive({
-  isDrawing: false, fromNodeId: '', fromPortId: '',
-  startPortWorldPos: { x: 0, y: 0 } as Position,
-  waypoints: [] as Position[], lastPoint: { x: 0, y: 0 } as Position,
+const draw = reactive({
+  active: false,
+  fromNodeId: '',
+  fromPortId: '',
+  startPos: { x: 0, y: 0 } as Position,
+  waypoints: [] as Position[],
 })
+
 const wpDrag = reactive({ active: false, connId: '', idx: -1 })
 
 const modes = [
-  { id: 'auto' as DrawMode, icon: '⚡', name: 'Auto Route', desc: 'Port → Port. System picks route.' },
-  { id: 'click' as DrawMode, icon: '✎', name: 'Free Draw', desc: 'Click to place waypoints freely.' },
-  { id: 'ortho' as DrawMode, icon: '⊾', name: 'Ortho Draw', desc: 'Horizontal/Vertical segments only.' },
+  { id: 'ortho' as DrawMode, icon: '⊾', name: 'Ortho Draw', desc: 'H/V segments only. Clean right angles.' },
+  { id: 'click' as DrawMode, icon: '✎', name: 'Free Draw', desc: 'Place waypoints at any angle.' },
 ]
 
 const nodes = reactive<NodeData[]>([
   { id: 'T-001', typeId: 'vertical-tank', position: { x: 50, y: 80 }, label: 'T-001', props: { level: 65, alarm: 'none' } },
-  { id: 'V-001', typeId: 'manual-valve', position: { x: 230, y: 198 }, label: 'V-001', props: { state: 'open', alarm: 'none' } },
-  { id: 'P-001', typeId: 'centrifugal-pump', position: { x: 370, y: 192 }, label: 'P-001', props: { state: 'running', alarm: 'none' } },
-  { id: 'T-002', typeId: 'vertical-tank', position: { x: 540, y: 80 }, label: 'T-002', props: { level: 40, alarm: 'none' } },
-  { id: 'V-002', typeId: 'manual-valve', position: { x: 710, y: 198 }, label: 'V-002', props: { state: 'closed', alarm: 'none' } },
+  { id: 'V-001', typeId: 'manual-valve', position: { x: 240, y: 208 }, label: 'V-001', props: { state: 'open', alarm: 'none' } },
+  { id: 'P-001', typeId: 'centrifugal-pump', position: { x: 380, y: 200 }, label: 'P-001', props: { state: 'running', alarm: 'none' } },
+  { id: 'T-002', typeId: 'vertical-tank', position: { x: 560, y: 80 }, label: 'T-002', props: { level: 40, alarm: 'none' } },
+  { id: 'V-002', typeId: 'manual-valve', position: { x: 720, y: 208 }, label: 'V-002', props: { state: 'closed', alarm: 'none' } },
   { id: 'PT-001', typeId: 'pressure-sensor', position: { x: 460, y: 50 }, label: 'PT-001', props: { value: 125.5, units: 'PSI', alarm: 'none' } },
 ])
 
 const connections = reactive<ConnData[]>([])
 
 // ═══════════════════════════════════════════════
-//  PORT HELPERS
+//  PORT HIGHLIGHTING
+//  Your PortIndicator accepts highlightedPortId prop.
+//  We tell each component which port to highlight.
 // ═══════════════════════════════════════════════
 
-function getNodePorts(node: NodeData): PortDefinition[] { return getPortsForType(node.typeId) }
-
-function getPortWorld(nodeId: string, portId: string): Position {
-  const node = nodes.find(n => n.id === nodeId)
-  if (!node) return { x: 0, y: 0 }
-  const port = getPortsForType(node.typeId).find(p => p.id === portId)
-  if (!port) return node.position
-  return { x: node.position.x + port.x, y: node.position.y + port.y }
-}
-
-function getPortDir(nodeId: string, portId: string): string {
-  if (portId.includes('left')) return 'left'
-  if (portId.includes('right')) return 'right'
-  if (portId.includes('top')) return 'up'
-  if (portId.includes('bottom')) return 'down'
-  return 'right'
-}
-
-function isPortHigh(nid: string, pid: string): boolean {
-  return (hovered.value?.n === nid && hovered.value?.p === pid) ||
-    (drawState.isDrawing && drawState.fromNodeId === nid && drawState.fromPortId === pid)
-}
-function isSnapTarget(nid: string, pid: string): boolean {
-  return snapInfo.value?.nodeId === nid && snapInfo.value?.portId === pid
+function getHighlightedPort(nodeId: string): string | undefined {
+  // Highlight hovered port
+  if (hoveredPort.value?.nodeId === nodeId) return hoveredPort.value.portId
+  // Highlight start port while drawing
+  if (draw.active && draw.fromNodeId === nodeId) return draw.fromPortId
+  // Highlight snap target
+  if (snapTarget.value?.nodeId === nodeId) return snapTarget.value.portId
+  return undefined
 }
 
 // ═══════════════════════════════════════════════
-//  COMPUTED
+//  SNAP LOGIC (THE FIX)
+//
+//  Problem: ports sit at positions like (20, 12) which
+//  don't align to a 10px grid. If waypoints snap to grid,
+//  the segment from port → first waypoint is diagonal.
+//
+//  Fix: snapForOrtho() ensures the first waypoint after
+//  a port shares one axis with the port (so the segment
+//  is perfectly H or V), and only snaps the OTHER axis.
+//
+//  For intermediate waypoints, normal grid snap is fine.
 // ═══════════════════════════════════════════════
 
-const currentInstructions = computed(() => {
-  if (!drawState.isDrawing) return '<b>Click any port</b> to start drawing a pipe.'
-  if (drawingMode.value === 'auto') return '<b>Click target port</b> to complete. Esc to cancel.'
-  if (drawingMode.value === 'click') return '<b>Click canvas</b> = waypoint. <b>Click port</b> = finish. Esc/right-click = cancel.'
-  return '<b>Click canvas</b> = H/V waypoint. <b>Click port</b> = finish. Esc = cancel.'
-})
+function snapToGrid(p: Position): Position {
+  if (!snapEnabled.value) return p
+  const g = gridSize.value
+  return { x: Math.round(p.x / g) * g, y: Math.round(p.y / g) * g }
+}
 
-const snapInfo = computed<{ nodeId: string; portId: string; world: Position } | null>(() => {
-  if (!drawState.isDrawing || !mousePos.value) return null
+/**
+ * Snap for orthogonal drawing.
+ * `anchor` is the previous point (port or last waypoint).
+ * We determine if the user is drawing more horizontally or vertically,
+ * then lock the shared axis to the anchor and snap only the free axis.
+ * This guarantees every segment is perfectly H or V.
+ */
+function snapOrtho(raw: Position, anchor: Position): { corner: Position | null; point: Position } {
+  const dx = Math.abs(raw.x - anchor.x)
+  const dy = Math.abs(raw.y - anchor.y)
+
+  // If roughly aligned on one axis, make a single straight segment
+  if (dx < 5) {
+    // Nearly vertical — lock X to anchor
+    const y = snapEnabled.value ? Math.round(raw.y / gridSize.value) * gridSize.value : raw.y
+    return { corner: null, point: { x: anchor.x, y } }
+  }
+  if (dy < 5) {
+    // Nearly horizontal — lock Y to anchor
+    const x = snapEnabled.value ? Math.round(raw.x / gridSize.value) * gridSize.value : raw.x
+    return { corner: null, point: { x, y: anchor.y } }
+  }
+
+  // Diagonal movement — create an L-shape (horizontal first, then vertical)
+  // The corner point shares Y with anchor, X with target (snapped)
+  const sx = snapEnabled.value ? Math.round(raw.x / gridSize.value) * gridSize.value : raw.x
+  const sy = snapEnabled.value ? Math.round(raw.y / gridSize.value) * gridSize.value : raw.y
+  const corner: Position = { x: sx, y: anchor.y }
+  const point: Position = { x: sx, y: sy }
+  return { corner, point }
+}
+
+/**
+ * When finishing a pipe at a target port, add alignment waypoints
+ * so the last segment arrives perfectly H or V at the port.
+ */
+function alignToTargetPort(waypoints: Position[], startPos: Position, targetPos: Position): Position[] {
+  const wp = [...waypoints]
+  const lastPt = wp.length > 0 ? wp[wp.length - 1] : startPos
+
+  // If already aligned on one axis, no extra waypoint needed
+  if (Math.abs(lastPt.x - targetPos.x) < 2 || Math.abs(lastPt.y - targetPos.y) < 2) {
+    return wp
+  }
+
+  // Add a corner so we arrive orthogonally
+  // Horizontal then vertical approach
+  wp.push({ x: targetPos.x, y: lastPt.y })
+  return wp
+}
+
+// ═══════════════════════════════════════════════
+//  SNAP TARGET (port proximity detection)
+// ═══════════════════════════════════════════════
+
+const snapTarget = computed<{ nodeId: string; portId: string; world: Position } | null>(() => {
+  if (!draw.active || !mousePos.value) return null
+  const DIST = 18
   for (const node of nodes) {
-    for (const port of getNodePorts(node)) {
-      if (node.id === drawState.fromNodeId && port.id === drawState.fromPortId) continue
+    for (const port of portsForType(node.typeId)) {
+      if (node.id === draw.fromNodeId && port.id === draw.fromPortId) continue
       const w = { x: node.position.x + port.x, y: node.position.y + port.y }
-      if (Math.hypot(w.x - mousePos.value.x, w.y - mousePos.value.y) < 18) return { nodeId: node.id, portId: port.id, world: w }
+      if (Math.hypot(w.x - mousePos.value.x, w.y - mousePos.value.y) < DIST) {
+        return { nodeId: node.id, portId: port.id, world: w }
+      }
     }
   }
   return null
 })
 
-const rubberPath = computed(() => {
-  if (!drawState.isDrawing || !mousePos.value) return ''
-  const from = drawState.waypoints.length > 0 ? drawState.waypoints[drawState.waypoints.length - 1] : drawState.startPortWorldPos
-  const to = snapInfo.value ? snapInfo.value.world : mousePos.value
-  if (drawingMode.value === 'ortho') return `M ${from.x} ${from.y} L ${to.x} ${from.y} L ${to.x} ${to.y}`
-  return `M ${from.x} ${from.y} L ${to.x} ${to.y}`
+// ═══════════════════════════════════════════════
+//  RUBBER BAND PREVIEW
+// ═══════════════════════════════════════════════
+
+const rubberBand = computed(() => {
+  if (!draw.active || !mousePos.value) return ''
+  const anchor = draw.waypoints.length > 0
+    ? draw.waypoints[draw.waypoints.length - 1]
+    : draw.startPos
+  const target = snapTarget.value ? snapTarget.value.world : mousePos.value
+
+  if (drawingMode.value === 'ortho') {
+    // Show the L-shape preview the user would get
+    const { corner, point } = snapOrtho(target, anchor)
+    const dest = snapTarget.value ? snapTarget.value.world : point
+    if (corner && Math.abs(corner.x - anchor.x) > 1 && Math.abs(corner.y - anchor.y) > 1) {
+      // Corner is distinct from both anchor and dest
+      return `M ${anchor.x} ${anchor.y} L ${corner.x} ${corner.y} L ${dest.x} ${dest.y}`
+    }
+    return `M ${anchor.x} ${anchor.y} L ${dest.x} ${dest.y}`
+  }
+
+  return `M ${anchor.x} ${anchor.y} L ${target.x} ${target.y}`
 })
 
-function makePath(conn: ConnData): string {
-  const s = getPortWorld(conn.from.nodeId, conn.from.portId), e = getPortWorld(conn.to.nodeId, conn.to.portId)
+const instructions = computed(() => {
+  if (!draw.active) return '<b>Click any port</b> to start drawing a pipe.'
+  if (drawingMode.value === 'ortho') return '<b>Click</b> to place H/V segment. <b>Click port</b> to finish. <b>Esc</b> to cancel.'
+  return '<b>Click</b> to place waypoint. <b>Click port</b> to finish. <b>Esc</b> to cancel.'
+})
+
+// ═══════════════════════════════════════════════
+//  PATH BUILDER (for hit area / selection glow)
+// ═══════════════════════════════════════════════
+
+function buildPath(conn: ConnData): string {
+  const s = portWorldPos(conn.from.nodeId, conn.from.portId)
+  const e = portWorldPos(conn.to.nodeId, conn.to.portId)
   return [s, ...conn.waypoints, e].map((p, i) => `${i ? 'L' : 'M'} ${p.x} ${p.y}`).join(' ')
 }
 
 // ═══════════════════════════════════════════════
-//  AUTO ROUTING
-// ═══════════════════════════════════════════════
-
-function autoRoute(sp: Position, sd: string, ep: Position, ed: string): Position[] {
-  const S = 25
-  const s = ext(sp, sd, S), e = ext(ep, ed, S), mx = (s.x + e.x) / 2
-  return simplify([s, { x: mx, y: s.y }, { x: mx, y: e.y }, e])
-}
-function ext(p: Position, d: string, n: number): Position {
-  return d === 'right' ? { x: p.x + n, y: p.y } : d === 'left' ? { x: p.x - n, y: p.y } : d === 'down' ? { x: p.x, y: p.y + n } : { x: p.x, y: p.y - n }
-}
-function simplify(pts: Position[]): Position[] {
-  if (pts.length <= 2) return pts
-  const o = [pts[0]]
-  for (let i = 1; i < pts.length - 1; i++) {
-    const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]]
-    if (Math.abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) > 2) o.push(b)
-  }
-  o.push(pts[pts.length - 1]); return o
-}
-
-// ═══════════════════════════════════════════════
-//  COORDINATE HELPERS
+//  SVG COORDINATE CONVERSION
 // ═══════════════════════════════════════════════
 
 function toSvg(e: MouseEvent): Position {
   if (!svgEl.value) return { x: 0, y: 0 }
-  const pt = svgEl.value.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY
-  const ctm = svgEl.value.getScreenCTM(); if (!ctm) return { x: 0, y: 0 }
-  const s = pt.matrixTransform(ctm.inverse()); return { x: s.x, y: s.y }
-}
-function snap(p: Position): Position {
-  if (!snapToGrid.value) return p
-  return { x: Math.round(p.x / gridSize.value) * gridSize.value, y: Math.round(p.y / gridSize.value) * gridSize.value }
+  const pt = svgEl.value.createSVGPoint()
+  pt.x = e.clientX; pt.y = e.clientY
+  const ctm = svgEl.value.getScreenCTM()
+  if (!ctm) return { x: 0, y: 0 }
+  const s = pt.matrixTransform(ctm.inverse())
+  return { x: s.x, y: s.y }
 }
 
 // ═══════════════════════════════════════════════
-//  DRAWING STATE MACHINE
+//  EVENT HANDLERS
 // ═══════════════════════════════════════════════
 
-function handlePortClick(nid: string, pid: string) {
-  if (!drawState.isDrawing) {
-    const w = getPortWorld(nid, pid)
-    Object.assign(drawState, { isDrawing: true, fromNodeId: nid, fromPortId: pid, startPortWorldPos: { ...w }, lastPoint: { ...w }, waypoints: [] })
-    selectedConnId.value = null; return
+// Port events from YOUR library's PortIndicator
+function onPortClick(nodeId: string, portId: string) {
+  if (!draw.active) {
+    // START drawing
+    const pos = portWorldPos(nodeId, portId)
+    draw.active = true
+    draw.fromNodeId = nodeId
+    draw.fromPortId = portId
+    draw.startPos = { ...pos }
+    draw.waypoints = []
+    selectedConnId.value = null
+    return
   }
-  if (nid === drawState.fromNodeId && pid === drawState.fromPortId) return
-  let wp = [...drawState.waypoints]
-  if (drawingMode.value === 'auto') {
-    wp = autoRoute(drawState.startPortWorldPos, getPortDir(drawState.fromNodeId, drawState.fromPortId), getPortWorld(nid, pid), getPortDir(nid, pid))
-  } else if (drawingMode.value === 'ortho') {
-    const last = wp.length ? wp[wp.length - 1] : drawState.startPortWorldPos, end = getPortWorld(nid, pid)
-    if (Math.abs(last.x - end.x) > 2 && Math.abs(last.y - end.y) > 2) wp.push({ x: end.x, y: last.y })
-  }
-  const id = `conn-${++connCtr}`
-  connections.push({ id, from: { nodeId: drawState.fromNodeId, portId: drawState.fromPortId }, to: { nodeId: nid, portId: pid }, waypoints: simplify(wp), props: { flowing: true, direction: 'forward' } })
-  selectedConnId.value = id; cancelDrawing()
-}
 
-function handleCanvasClick(e: MouseEvent) {
-  if (!drawState.isDrawing) return
-  if (drawingMode.value === 'auto') return
-  if (snapInfo.value) { handlePortClick(snapInfo.value.nodeId, snapInfo.value.portId); return }
-  const pt = snap(toSvg(e))
+  // FINISH drawing — clicked a target port
+  if (nodeId === draw.fromNodeId && portId === draw.fromPortId) return
+
+  let wp = [...draw.waypoints]
+  const targetPos = portWorldPos(nodeId, portId)
+
+  // Ensure last segment arrives orthogonally at target port
   if (drawingMode.value === 'ortho') {
-    const last = drawState.waypoints.length ? drawState.waypoints[drawState.waypoints.length - 1] : drawState.startPortWorldPos
-    if (Math.abs(last.x - pt.x) > 2 && Math.abs(last.y - pt.y) > 2) drawState.waypoints.push({ x: pt.x, y: last.y })
+    wp = alignToTargetPort(wp, draw.startPos, targetPos)
   }
-  drawState.waypoints.push({ ...pt }); drawState.lastPoint = { ...pt }
+
+  // Remove collinear points
+  wp = simplify(wp)
+
+  connections.push({
+    id: `conn-${++connCtr}`,
+    from: { nodeId: draw.fromNodeId, portId: draw.fromPortId },
+    to: { nodeId, portId },
+    waypoints: wp,
+    props: { flowing: true, direction: 'forward' },
+  })
+  selectedConnId.value = `conn-${connCtr}`
+  cancelDrawing()
 }
 
-function handleMouseMove(e: MouseEvent) {
-  mousePos.value = snap(toSvg(e))
+function onPortEnter(nodeId: string, portId: string) {
+  hoveredPort.value = { nodeId, portId }
+}
+
+function onPortLeave(_nodeId: string, _portId: string) {
+  hoveredPort.value = null
+}
+
+function onCanvasClick(e: MouseEvent) {
+  if (!draw.active) {
+    selectedConnId.value = null
+    return
+  }
+
+  // If near a port, treat as port click
+  if (snapTarget.value) {
+    onPortClick(snapTarget.value.nodeId, snapTarget.value.portId)
+    return
+  }
+
+  const raw = toSvg(e)
+  const anchor = draw.waypoints.length > 0 ? draw.waypoints[draw.waypoints.length - 1] : draw.startPos
+
+  if (drawingMode.value === 'ortho') {
+    const { corner, point } = snapOrtho(raw, anchor)
+    if (corner) draw.waypoints.push(corner)
+    draw.waypoints.push(point)
+  } else {
+    // Free draw — snap entire point to grid
+    draw.waypoints.push(snapToGrid(raw))
+  }
+}
+
+function onMouseMove(e: MouseEvent) {
+  const raw = toSvg(e)
+  mousePos.value = raw // Keep raw for rubber-band accuracy
+
   if (wpDrag.active) {
-    const c = connections.find(c => c.id === wpDrag.connId)
-    if (c?.waypoints[wpDrag.idx]) c.waypoints[wpDrag.idx] = { ...mousePos.value }
+    const conn = connections.find(c => c.id === wpDrag.connId)
+    if (conn?.waypoints[wpDrag.idx]) {
+      conn.waypoints[wpDrag.idx] = snapToGrid(raw)
+    }
   }
 }
 
-function cancelDrawing() { Object.assign(drawState, { isDrawing: false, fromNodeId: '', fromPortId: '', waypoints: [] }) }
+function cancelDrawing() {
+  draw.active = false
+  draw.fromNodeId = ''
+  draw.fromPortId = ''
+  draw.waypoints = []
+}
 
-function startWpDrag(cid: string, idx: number, e: MouseEvent) { Object.assign(wpDrag, { active: true, connId: cid, idx }); e.preventDefault() }
-function globalUp() { wpDrag.active = false }
-onMounted(() => { window.addEventListener('mouseup', globalUp); svgEl.value?.focus() })
-onUnmounted(() => { window.removeEventListener('mouseup', globalUp) })
+// ═══════════════════════════════════════════════
+//  POST-DRAW EDITING
+// ═══════════════════════════════════════════════
 
-function deleteConnection(id: string) { const i = connections.findIndex(c => c.id === id); if (i >= 0) connections.splice(i, 1); if (selectedConnId.value === id) selectedConnId.value = null }
+function startWpDrag(connId: string, idx: number, e: MouseEvent) {
+  wpDrag.active = true; wpDrag.connId = connId; wpDrag.idx = idx
+  e.preventDefault()
+}
+
+function onGlobalMouseUp() { wpDrag.active = false }
+
+onMounted(() => { window.addEventListener('mouseup', onGlobalMouseUp); svgEl.value?.focus() })
+onUnmounted(() => { window.removeEventListener('mouseup', onGlobalMouseUp) })
+
+// ═══════════════════════════════════════════════
+//  UTILITIES
+// ═══════════════════════════════════════════════
+
+function simplify(pts: Position[]): Position[] {
+  if (pts.length <= 1) return pts
+  const out = [pts[0]]
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [a, b, c] = [pts[i - 1], pts[i], pts[i + 1]]
+    if (Math.abs((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y)) > 2) out.push(b)
+  }
+  out.push(pts[pts.length - 1])
+  return out
+}
+
+function deleteConnection(id: string) {
+  const i = connections.findIndex(c => c.id === id)
+  if (i >= 0) connections.splice(i, 1)
+  if (selectedConnId.value === id) selectedConnId.value = null
+}
+
 function resetAll() { connections.splice(0); selectedConnId.value = null; cancelDrawing() }
+
 function exportJson() {
   const d = { version: 1, nodes: nodes.map(n => ({ ...n })), connections: connections.map(c => ({ ...c })) }
-  const b = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' })
-  const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = 'diagram.json'; a.click(); URL.revokeObjectURL(u)
+  const blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a'); a.href = url; a.download = 'diagram.json'; a.click()
+  URL.revokeObjectURL(url)
 }
 </script>
 
@@ -447,9 +613,8 @@ function exportJson() {
 .ctrl-section { margin-bottom: 14px; }
 .ctrl-heading { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: #656d76; margin-bottom: 6px; }
 .mode-btn { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 8px 10px; margin-bottom: 4px; background: #1c2129; border: 1px solid #30363d; border-radius: 6px; color: #e6edf3; cursor: pointer; text-align: left; font-family: inherit; transition: all 0.12s; }
-.mode-btn:hover { border-color: #58a6ff; }
-.mode-btn.active { border-color: #58a6ff; background: rgba(88,166,255,0.1); box-shadow: 0 0 0 1px #58a6ff; }
-.mode-icon { font-size: 16px; } .mode-info { display: flex; flex-direction: column; gap: 2px; } .mode-name { font-size: 12px; font-weight: 600; } .mode-desc { font-size: 10px; color: #8b949e; }
+.mode-btn:hover { border-color: #58a6ff; } .mode-btn.active { border-color: #58a6ff; background: rgba(88,166,255,0.1); box-shadow: 0 0 0 1px #58a6ff; }
+.mode-icon { font-size: 16px; } .mode-name { font-size: 12px; font-weight: 600; } .mode-desc { font-size: 10px; color: #8b949e; }
 .ctrl-toggle { display: flex; align-items: center; gap: 6px; padding: 3px 0; cursor: pointer; font-size: 12px; color: #8b949e; }
 .ctrl-toggle input { accent-color: #58a6ff; }
 .instructions { font-size: 11px; color: #8b949e; line-height: 1.6; padding: 8px; background: #1c2129; border: 1px solid #30363d; border-radius: 6px; }
@@ -463,13 +628,11 @@ function exportJson() {
 .canvas-area { flex: 1; position: relative; overflow: hidden; }
 .canvas-svg { width: 100%; height: 100%; display: block; outline: none; cursor: crosshair; }
 .node-group { cursor: pointer; }
-.port-target { cursor: pointer; transition: all 0.15s; } .port-target:hover, .port-target.highlighted { fill: rgba(88,166,255,0.2); stroke: #58a6ff; stroke-width: 2; } .port-target.snapping { fill: rgba(63,185,80,0.25); stroke: #3fb950; stroke-width: 2; }
 .wp-handle { cursor: grab; transition: all 0.1s; } .wp-handle:hover { r: 6; }
 .pulse { animation: p1 1.5s ease-out infinite; } .pulse-green { animation: p2 1s ease-out infinite; }
 @keyframes p1 { 0% { r: 6; opacity: 0.6; } 100% { r: 14; opacity: 0; } }
 @keyframes p2 { 0% { r: 10; opacity: 0.7; } 100% { r: 18; opacity: 0; } }
 .mode-badge { position: absolute; top: 10px; left: 10px; padding: 4px 10px; border-radius: 4px; font-size: 10px; font-weight: 600; letter-spacing: 0.06em; pointer-events: none; }
-.mode-badge.auto { background: rgba(188,140,255,0.15); color: #bc8cff; border: 1px solid rgba(188,140,255,0.3); }
 .mode-badge.click { background: rgba(88,166,255,0.15); color: #58a6ff; border: 1px solid rgba(88,166,255,0.3); }
 .mode-badge.ortho { background: rgba(63,185,80,0.15); color: #3fb950; border: 1px solid rgba(63,185,80,0.3); }
 .draw-status { position: absolute; bottom: 10px; left: 10px; right: 10px; padding: 6px 12px; background: #161b22; border: 1px solid #30363d; border-radius: 6px; font-size: 11px; color: #8b949e; display: flex; align-items: center; gap: 6px; }
