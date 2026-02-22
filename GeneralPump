@@ -1,0 +1,194 @@
+<template>
+  <g
+    class="general-pump"
+    :transform="`translate(${position.x}, ${position.y}) rotate(${rotation || 0})`"
+    preserve-aspect-ratio="xMidYMid meet"
+    @click="handleClick"
+  >
+    <!-- Pump casing (circle) -->
+    <circle
+      :cx="center.x"
+      :cy="center.y"
+      :r="radius"
+      :fill="pumpColor"
+      :stroke="COLORS.STROKE"
+      :stroke-width="STROKE_WIDTH"
+      vector-effect="non-scaling-stroke"
+    />
+
+    <!--
+      Impeller blades
+      
+      FIX: Using SVG <animateTransform> instead of CSS animation.
+      CSS transform-origin with px units breaks when the component
+      is nested inside translated <g> elements (which the editor does).
+      SVG-native animation always rotates around the correct center.
+    -->
+    <g class="impeller">
+      <!-- Vertical blade -->
+      <line
+        :x1="center.x" :y1="center.y - radius * 0.7"
+        :x2="center.x" :y2="center.y + radius * 0.7"
+        stroke="#fff" :stroke-width="STROKE_WIDTH + 0.5" opacity="0.6"
+        vector-effect="non-scaling-stroke"
+      />
+      <!-- Horizontal blade -->
+      <line
+        :x1="center.x - radius * 0.7" :y1="center.y"
+        :x2="center.x + radius * 0.7" :y2="center.y"
+        stroke="#fff" :stroke-width="STROKE_WIDTH + 0.5" opacity="0.6"
+        vector-effect="non-scaling-stroke"
+      />
+      <!-- Diagonal blade 1 -->
+      <line
+        :x1="center.x - radius * 0.5" :y1="center.y - radius * 0.5"
+        :x2="center.x + radius * 0.5" :y2="center.y + radius * 0.5"
+        stroke="#fff" :stroke-width="STROKE_WIDTH" opacity="0.35"
+        vector-effect="non-scaling-stroke"
+      />
+      <!-- Diagonal blade 2 -->
+      <line
+        :x1="center.x + radius * 0.5" :y1="center.y - radius * 0.5"
+        :x2="center.x - radius * 0.5" :y2="center.y + radius * 0.5"
+        stroke="#fff" :stroke-width="STROKE_WIDTH" opacity="0.35"
+        vector-effect="non-scaling-stroke"
+      />
+      <!-- Center hub -->
+      <circle
+        :cx="center.x" :cy="center.y" :r="radius * 0.15"
+        fill="#fff" opacity="0.4"
+      />
+
+      <!--
+        SVG-native rotation — works correctly regardless of parent transforms.
+        Only active when state === 'on' or 'running'.
+        The `from/to` values rotate around (center.x, center.y).
+      -->
+      <animateTransform
+        v-if="isRunning"
+        attributeName="transform"
+        type="rotate"
+        :from="`0 ${center.x} ${center.y}`"
+        :to="`360 ${center.x} ${center.y}`"
+        dur="2s"
+        repeatCount="indefinite"
+      />
+    </g>
+
+    <!-- Discharge nozzle (rectangle extending right from circle) -->
+    <rect
+      :x="center.x + radius - 1"
+      :y="center.y - radius * 0.3"
+      :width="nozzleWidth"
+      :height="radius * 0.6"
+      :fill="pumpColor"
+      :stroke="COLORS.STROKE"
+      :stroke-width="STROKE_WIDTH"
+      vector-effect="non-scaling-stroke"
+    />
+
+    <!-- State indicator dot (small circle at bottom) -->
+    <circle
+      :cx="center.x"
+      :cy="center.y + radius + 8"
+      r="3"
+      :fill="isRunning ? COLORS.RUNNING : COLORS.STOPPED"
+      vector-effect="non-scaling-stroke"
+    />
+
+    <!-- Label -->
+    <ComponentLabel
+      :show="showLabel"
+      :position="{ x: center.x, y: center.y - radius - 6 }"
+      :text="label"
+    />
+
+    <!-- Ports -->
+    <PortIndicator
+      :ports="ports"
+      :show="showPorts"
+      :highlightedPortId="highlightedPortId"
+      @port-click="handlePortClick"
+      @port-mouse-enter="handlePortMouseEnter"
+      @port-mouse-leave="handlePortMouseLeave"
+    />
+  </g>
+</template>
+
+<script setup lang="ts">
+import { COLORS, STROKE_WIDTH } from '@/lib/constants'
+import type { CircleProps, ComponentEvents, DigitalComponentProps } from '@/lib/types'
+import { getDigitalComponentColor } from '@/lib/utils/colorUtils'
+import { computed } from 'vue'
+import { ComponentLabel, PortIndicator } from '../../common'
+import { calculateCircleCenter } from '@/lib/utils'
+import { usePortEvents } from '@/lib/composables/usePortEvents'
+
+// ═══════════════════════════════════════════════
+//  PROPS
+// ═══════════════════════════════════════════════
+
+interface PumpProps extends DigitalComponentProps, CircleProps {
+  highlightedPortId?: string
+}
+
+const props = withDefaults(defineProps<PumpProps>(), {
+  showLabel: true,
+  alarm: 'none',
+  radius: 20,
+})
+
+// ═══════════════════════════════════════════════
+//  CORE
+// ═══════════════════════════════════════════════
+
+const center = computed(() => calculateCircleCenter(props.radius))
+const radius = computed(() => props.radius)
+const nozzleWidth = computed(() => radius.value * 0.4)
+
+const isRunning = computed(() => props.state === 'on' || props.state === 'running')
+const pumpColor = computed(() => getDigitalComponentColor(props.alarm, props.state))
+
+const emit = defineEmits<ComponentEvents>()
+
+function handleClick() {
+  emit('click')
+}
+
+// ═══════════════════════════════════════════════
+//  PORTS
+//
+//  Using custom port positions instead of calculateCirclePorts
+//  because the pump has a discharge nozzle that extends beyond
+//  the circle. The 'right' port sits at the nozzle tip, not
+//  at the circle edge.
+// ═══════════════════════════════════════════════
+
+const ports = computed(() => {
+  const cx = center.value.x
+  const cy = center.value.y
+  const r = radius.value
+  return [
+    { id: 'left', x: cx - r, y: cy },
+    { id: 'right', x: cx + r + nozzleWidth.value, y: cy },
+    { id: 'top', x: cx, y: cy - r },
+    { id: 'bottom', x: cx, y: cy + r },
+  ]
+})
+
+const { handlePortClick, handlePortMouseEnter, handlePortMouseLeave } = usePortEvents(emit)
+
+defineExpose({
+  ports: ports,
+})
+</script>
+
+<style scoped>
+.general-pump {
+  cursor: pointer;
+}
+
+.general-pump:hover {
+  filter: brightness(1.1);
+}
+</style>
