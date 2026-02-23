@@ -1,0 +1,12 @@
+# ============================================================
+# .npmrc — FOR CONSUMERS (other teams installing the package)
+# Place this in the consumer project root or ~/.npmrc
+# ============================================================
+
+# Route @my-group scoped packages to GitLab group registry
+# Replace YOUR_GROUP_ID with the numeric Group ID from GitLab
+@my-group:registry=https://gitlab.com/api/v4/groups/YOUR_GROUP_ID/-/packages/npm/
+
+# Auth token — use a Deploy Token (read_package_registry scope)
+# or a Personal Access Token (read_api scope)
+//gitlab.com/api/v4/groups/YOUR_GROUP_ID/-/packages/npm/:_authToken=YOUR_TOKEN_HERE
