@@ -293,3 +293,49 @@ const searchQuery = ref('');
   overflow-y: auto;
 }
 </style>
+
+step - 4
+
+ConfigurationPage
+
+<script setup lang="ts">
+import PaletteDrawer from '@/components/palette/PaletteDrawer.vue';
+</script>
+
+<template>
+  <div class="config-page">
+    <PaletteDrawer />
+    <div class="canvas-area">
+      <svg class="canvas-grid">
+        <defs>
+          <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+            <circle cx="10" cy="10" r="0.5" fill="hsl(0 0% 22%)" />
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#grid)" />
+      </svg>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.config-page {
+  height: 100%;
+  display: flex;
+}
+
+.canvas-area {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  background: hsl(0 0% 10%);
+}
+
+.canvas-grid {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+</style>
