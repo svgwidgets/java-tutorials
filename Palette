@@ -1,0 +1,305 @@
+step 1
+
+PaletteDrawer
+
+<template>
+  <aside class="palette">
+    <div class="palette__header">Components</div>
+    <!-- search and categories will go here -->
+  </aside>
+</template>
+
+<style scoped>
+.palette {
+  width: 220px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: hsl(0 0% 13%);
+  border-right: 1px solid hsl(0 0% 22%);
+  flex-shrink: 0;
+}
+
+.palette__header {
+  padding: 6px 12px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: hsl(0 0% 55%);
+  background: hsl(0 0% 15%);
+  border-bottom: 1px solid hsl(0 0% 22%);
+}
+</style>
+
+ConfigurationPage
+
+<script setup lang="ts">
+import PaletteDrawer from '@/components/palette/PaletteDrawer.vue';
+</script>
+
+<template>
+  <div class="config-page">
+    <PaletteDrawer />
+    <div class="config-content">
+      <!-- canvas will go here -->
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.config-page {
+  height: 100%;
+  display: flex;
+}
+
+.config-content {
+  flex: 1;
+  min-width: 0;
+}
+</style>
+
+Step 2
+
+PaletteSearch
+
+<script setup lang="ts">
+import InputText from 'primevue/inputtext';
+import IconField from 'primevue/iconfield';
+import InputIcon from 'primevue/inputicon';
+
+const model = defineModel<string>({ default: '' });
+</script>
+
+<template>
+  <IconField>
+    <InputIcon class="pi pi-search" />
+    <InputText v-model="model" placeholder="Search..." size="small" />
+  </IconField>
+</template>
+
+<style scoped>
+:deep(.p-inputtext) {
+  width: 100%;
+  font-size: 11px;
+}
+</style>
+
+PaletteDrawer
+
+<script setup lang="ts">
+import { ref } from 'vue';
+import PaletteSearch from './PaletteSearch.vue';
+
+const searchQuery = ref('');
+</script>
+
+<template>
+  <aside class="palette">
+    <div class="palette__header">Components</div>
+    <div class="palette__search">
+      <PaletteSearch v-model="searchQuery" />
+    </div>
+    <!-- categories will go here -->
+  </aside>
+</template>
+
+<style scoped>
+.palette {
+  width: 220px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: hsl(0 0% 13%);
+  border-right: 1px solid hsl(0 0% 22%);
+  flex-shrink: 0;
+}
+
+.palette__header {
+  padding: 6px 12px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: hsl(0 0% 55%);
+  background: hsl(0 0% 15%);
+  border-bottom: 1px solid hsl(0 0% 22%);
+}
+
+.palette__search {
+  padding: 8px;
+}
+</style>
+
+step 3:
+
+PaletteItem
+
+<script setup lang="ts">
+defineProps<{
+  name: string;
+}>();
+</script>
+
+<template>
+  <button class="item">
+    <div class="item__icon">
+      <!-- SVG preview will go here later -->
+    </div>
+    <span class="item__name">{{ name }}</span>
+  </button>
+</template>
+
+<style scoped>
+.item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  height: 72px;
+  border: 1px solid transparent;
+  background: none;
+  cursor: pointer;
+}
+
+.item:hover {
+  background: hsl(0 0% 16%);
+}
+
+.item__icon {
+  width: 32px;
+  height: 32px;
+}
+
+.item__name {
+  font-size: 10px;
+  color: hsl(0 0% 55%);
+  margin-top: 4px;
+  text-align: center;
+  line-height: 1.2;
+}
+</style>
+
+palettecategory
+
+<script setup lang="ts">
+import { ref } from 'vue';
+
+defineProps<{
+  name: string;
+  count: number;
+}>();
+
+const open = ref(true);
+</script>
+
+<template>
+  <div class="cat">
+    <button class="cat__header" @click="open = !open">
+      <i class="pi" :class="open ? 'pi-chevron-down' : 'pi-chevron-right'" />
+      {{ name }}
+    </button>
+    <div v-if="open" class="cat__body">
+      <slot />
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.cat__header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: hsl(0 0% 55%);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.cat__header:hover {
+  color: hsl(0 0% 85%);
+}
+
+.cat__header .pi {
+  font-size: 10px;
+}
+
+.cat__body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 0 8px 8px;
+}
+</style>
+
+PaletteDrawer
+
+<script setup lang="ts">
+import { ref } from 'vue';
+import PaletteSearch from './PaletteSearch.vue';
+import PaletteCategory from './PaletteCategory.vue';
+import PaletteItem from './PaletteItem.vue';
+
+const searchQuery = ref('');
+</script>
+
+<template>
+  <aside class="palette">
+    <div class="palette__header">Components</div>
+    <div class="palette__search">
+      <PaletteSearch v-model="searchQuery" />
+    </div>
+    <div class="palette__body">
+      <PaletteCategory name="Valves" :count="2">
+        <PaletteItem name="Ball Valve" />
+        <PaletteItem name="Gate Valve" />
+      </PaletteCategory>
+      <PaletteCategory name="Pumps" :count="1">
+        <PaletteItem name="Centrifugal Pump" />
+      </PaletteCategory>
+      <PaletteCategory name="Transmitters" :count="2">
+        <PaletteItem name="Pressure Transmitter" />
+        <PaletteItem name="Temperature Transmitter" />
+      </PaletteCategory>
+    </div>
+  </aside>
+</template>
+
+<style scoped>
+.palette {
+  width: 220px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: hsl(0 0% 13%);
+  border-right: 1px solid hsl(0 0% 22%);
+  flex-shrink: 0;
+}
+
+.palette__header {
+  padding: 6px 12px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: hsl(0 0% 55%);
+  background: hsl(0 0% 15%);
+  border-bottom: 1px solid hsl(0 0% 22%);
+}
+
+.palette__search {
+  padding: 8px;
+}
+
+.palette__body {
+  flex: 1;
+  overflow-y: auto;
+}
+</style>
