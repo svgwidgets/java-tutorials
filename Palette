@@ -143,9 +143,6 @@ defineProps<{
 
 <template>
   <button class="item">
-    <div class="item__icon">
-      <!-- SVG preview will go here later -->
-    </div>
     <span class="item__name">{{ name }}</span>
   </button>
 </template>
@@ -153,11 +150,10 @@ defineProps<{
 <style scoped>
 .item {
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 6px;
-  height: 72px;
+  height: 40px;
   border: 1px solid transparent;
   background: none;
   cursor: pointer;
@@ -167,15 +163,9 @@ defineProps<{
   background: hsl(0 0% 16%);
 }
 
-.item__icon {
-  width: 32px;
-  height: 32px;
-}
-
 .item__name {
   font-size: 10px;
   color: hsl(0 0% 55%);
-  margin-top: 4px;
   text-align: center;
   line-height: 1.2;
 }
