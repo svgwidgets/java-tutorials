@@ -1,0 +1,426 @@
+# SVG vs Canvas (Konva) — Benchmark Plan
+
+## Test Bench Software — Rendering Technology Decision
+
+**Purpose:** Settle the SVG vs Canvas question with measured data, not assumptions. Both renderers draw identical components, receive identical WebSocket data at 10 Hz, and are measured under identical conditions.
+
+**Decision Criteria:** The technology that maintains ≥30 FPS with ≤50ms alarm display latency at the target component count wins. If both pass, SVG wins by default (simpler developer experience for the authoring pillar).
+
+---
+
+## 1. What We're Testing
+
+Three questions, in priority order:
+
+1. **Rendering throughput** — Can each technology repaint N sensor values at 10 Hz without dropping below 30 FPS?
+2. **Alarm latency** — When a threshold is breached, how many milliseconds until the alarm visual appears on screen?
+3. **Scaling ceiling** — At what component count does each technology start degrading?
+
+---
+
+## 2. Test Component Design
+
+Both SVG and Canvas must render the exact same visual component. Keep it representative of a real P&ID component but simple enough that the benchmark measures rendering, not drawing complexity.
+
+### Component Structure
+
+Each "component" on the canvas/SVG consists of:
+
+- 1 rectangle (60×40px) — the component body, with a fill color that changes based on status
+- 1 text label (top) — the engineering tag, e.g. "PT-101" (static, never changes)
+- 1 text value (center) — the sensor reading, e.g. "42.31 bar" (updates at 10 Hz)
+- 1 small circle (8px radius) — status indicator dot, color changes on threshold breach
+- 2 small squares (6×6px) — port indicators (left and right), static
+
+**Total primitives per component: 6 elements**
+
+### Connection Lines
+
+For every 2 components, draw 1 straight line connecting them (simulating pipes). These are static and never update.
+
+### Color Scheme
+
+Use the dark theme from the handover document:
+
+- Background: #1A1A2E
+- Component body: #16213E
+- Text: #CCCCCC
+- Normal status: #33CC33 (green)
+- Warning status: #FFAA00 (yellow)
+- Alarm status: #FF3333 (red)
+
+---
+
+## 3. Test Scenarios
+
+Run each scenario on both SVG and Canvas implementations:
+
+| Scenario | Components | Sensors Updating | Connections | Purpose |
+|----------|-----------|-------------------|-------------|---------|
+| S1 — Small | 50 | 50 | 25 | Baseline, should be trivial for both |
+| S2 — Medium | 200 | 200 | 100 | Typical bench size |
+| S3 — Large | 500 | 500 | 250 | Large bench / stress test |
+| S4 — Extreme | 1000 | 1000 | 500 | Find the ceiling |
+| S5 — Partial Update | 500 | 50 (10% changing) | 250 | Realistic — most values don't change every tick |
+
+---
+
+## 4. Data Simulation
+
+### WebSocket Server
+
+Build a simple Node.js WebSocket server that pushes telemetry at exactly 10 Hz (every 100ms):
+
+```typescript
+// ws-simulator.ts
+import { WebSocketServer } from 'ws';
+
+const wss = new WebSocketServer({ port: 8080 });
+const TICK_INTERVAL = 100; // 10 Hz
+let sensorCount = 500; // configurable via query param
+
+wss.on('connection', (ws, req) => {
+  const count = parseInt(new URL(req.url!, 'http://localhost').searchParams.get('sensors') || '500');
+  sensorCount = count;
+
+  const interval = setInterval(() => {
+    const readings: Record<string, { value: number; timestamp: number }> = {};
+
+    for (let i = 0; i < sensorCount; i++) {
+      readings[`sensor-${i}`] = {
+        value: 20 + Math.random() * 80,  // 20-100 range
+        timestamp: Date.now()
+      };
+    }
+
+    ws.send(JSON.stringify(readings));
+  }, TICK_INTERVAL);
+
+  ws.on('close', () => clearInterval(interval));
+});
+```
+
+### Threshold Rules for Alarm Testing
+
+For every sensor:
+
+- Yellow warning: value > 70
+- Red alarm: value > 90
+- Normal: value ≤ 70
+
+With values randomised between 20-100, roughly 30% will be in warning and 10% in alarm on any given tick. This exercises the color-change code path continuously.
+
+### Partial Update Variant (S5)
+
+For scenario S5, only include 10% of sensors in each WebSocket message (randomly selected). This tests whether the renderer is smart enough to skip unchanged elements.
+
+---
+
+## 5. SVG Implementation
+
+A single Vue component using inline SVG. Each P&ID component is an SVG `<g>` group with reactive bindings:
+
+```vue
+<!-- BenchmarkSVG.vue -->
+<template>
+  <svg :width="canvasWidth" :height="canvasHeight"
+       :viewBox="`0 0 ${canvasWidth} ${canvasHeight}`"
+       style="background: #1A1A2E">
+
+    <!-- Static connections -->
+    <line v-for="conn in connections" :key="conn.id"
+      :x1="conn.x1" :y1="conn.y1" :x2="conn.x2" :y2="conn.y2"
+      stroke="#4A9EFF" stroke-width="2" />
+
+    <!-- Components -->
+    <g v-for="comp in components" :key="comp.id"
+       :transform="`translate(${comp.x}, ${comp.y})`">
+
+      <!-- Body -->
+      <rect width="60" height="40" rx="4"
+        :fill="getBodyColor(comp.id)" stroke="#4A9EFF" stroke-width="1" />
+
+      <!-- Tag label (static) -->
+      <text x="30" y="-5" text-anchor="middle"
+        fill="#CCCCCC" font-size="10">{{ comp.tag }}</text>
+
+      <!-- Live value (updates at 10Hz) -->
+      <text x="30" y="24" text-anchor="middle"
+        :fill="getValueColor(comp.id)" font-size="12" font-weight="bold">
+        {{ getDisplayValue(comp.id) }}
+      </text>
+
+      <!-- Status dot -->
+      <circle cx="52" cy="8" r="4"
+        :fill="getStatusColor(comp.id)" />
+
+      <!-- Ports (static) -->
+      <rect x="-6" y="14" width="6" height="6" fill="#4A9EFF" />
+      <rect x="60" y="14" width="6" height="6" fill="#4A9EFF" />
+    </g>
+
+    <!-- Alarm overlays -->
+    <rect v-for="alarm in activeAlarms" :key="'alarm-' + alarm.id"
+      :x="alarm.x - 4" :y="alarm.y - 4"
+      :width="68" :height="48"
+      fill="none" stroke="#FF3333" stroke-width="3"
+      stroke-dasharray="8,4" rx="6" />
+  </svg>
+</template>
+```
+
+### Optimisation Variants to Test
+
+- **SVG-A: Naive** — fully reactive, v-for with computed properties
+- **SVG-B: Batched DOM** — bypass Vue, use `requestAnimationFrame` + direct `setAttribute` calls
+- **SVG-C: Grouped updates** — use `document.createDocumentFragment` or batch DOM reads/writes
+
+---
+
+## 6. Canvas (Konva) Implementation
+
+Using vue-konva with the layered architecture:
+
+```vue
+<!-- BenchmarkKonva.vue -->
+<template>
+  <v-stage :config="{ width: canvasWidth, height: canvasHeight }">
+
+    <!-- Layer 1: Static structure -->
+    <v-layer ref="diagramLayer">
+      <v-line v-for="conn in connections" :key="conn.id"
+        :config="{ points: conn.points, stroke: '#4A9EFF', strokeWidth: 2 }" />
+
+      <v-group v-for="comp in components" :key="comp.id"
+        :config="{ x: comp.x, y: comp.y }">
+        <v-rect :config="{ width: 60, height: 40, fill: '#16213E',
+                            stroke: '#4A9EFF', strokeWidth: 1, cornerRadius: 4 }" />
+        <v-text :config="{ x: 0, y: -15, width: 60, text: comp.tag,
+                           align: 'center', fill: '#CCCCCC', fontSize: 10 }" />
+        <v-rect :config="{ x: -6, y: 14, width: 6, height: 6, fill: '#4A9EFF' }" />
+        <v-rect :config="{ x: 60, y: 14, width: 6, height: 6, fill: '#4A9EFF' }" />
+      </v-group>
+    </v-layer>
+
+    <!-- Layer 2: Live data (listening disabled) -->
+    <v-layer ref="dataLayer" :config="{ listening: false }">
+      <!-- Populated imperatively, not via v-for -->
+    </v-layer>
+
+    <!-- Layer 3: Alarms (listening disabled) -->
+    <v-layer ref="alarmLayer" :config="{ listening: false }">
+    </v-layer>
+
+  </v-stage>
+</template>
+```
+
+### Optimisation Variants to Test
+
+- **Canvas-A: Vue reactive** — v-for on data layer with reactive config bindings
+- **Canvas-B: Direct Konva** — bypass vue-konva on data layer, create Konva.Text nodes imperatively, update via `node.text()` / `node.fill()`, call `batchDraw()` once per tick
+- **Canvas-C: Layered + direct** — same as B but with separate alarm layer that redraws independently
+
+---
+
+## 7. Measurements
+
+### Metrics to Capture
+
+For every test run, capture these per-frame metrics over a 60-second window (after a 5-second warmup):
+
+| Metric | How to Measure | Target |
+|--------|----------------|--------|
+| **FPS** | `requestAnimationFrame` loop counting frames per second | ≥ 30 FPS sustained |
+| **Frame time** | `performance.now()` delta between rAF callbacks | ≤ 33ms (p95) |
+| **JS heap** | `performance.memory.usedJSHeapSize` (Chrome only) | No continuous growth (leak check) |
+| **DOM node count** | `document.querySelectorAll('*').length` every 5 seconds | SVG: observe growth. Canvas: should be constant |
+| **Alarm latency** | Timestamp when threshold value received vs timestamp when alarm visual painted (mark in rAF after update) | ≤ 50ms |
+| **Long frames** | Count of frames exceeding 50ms | 0 in normal operation |
+| **CPU usage** | Chrome DevTools Performance tab, percentage of time in scripting vs rendering vs painting | Observe distribution |
+
+### FPS Measurement Code
+
+Embed this in both implementations:
+
+```typescript
+// metrics.ts
+class PerformanceMetrics {
+  private frames: number[] = [];
+  private lastTime = performance.now();
+  private fpsHistory: number[] = [];
+  private frameTimeHistory: number[] = [];
+  private alarmLatencies: number[] = [];
+
+  tick() {
+    const now = performance.now();
+    const delta = now - this.lastTime;
+    this.lastTime = now;
+    this.frameTimeHistory.push(delta);
+
+    // FPS every second
+    this.frames.push(now);
+    this.frames = this.frames.filter(t => t > now - 1000);
+
+    if (this.frameTimeHistory.length % 60 === 0) {
+      this.fpsHistory.push(this.frames.length);
+    }
+  }
+
+  recordAlarmLatency(wsReceiveTime: number) {
+    // Call this in the next rAF after processing the alarm
+    requestAnimationFrame(() => {
+      const paintTime = performance.now();
+      this.alarmLatencies.push(paintTime - wsReceiveTime);
+    });
+  }
+
+  getReport() {
+    const sorted = [...this.frameTimeHistory].sort((a, b) => a - b);
+    return {
+      avgFps: this.fpsHistory.reduce((a, b) => a + b, 0) / this.fpsHistory.length,
+      minFps: Math.min(...this.fpsHistory),
+      p50FrameTime: sorted[Math.floor(sorted.length * 0.5)],
+      p95FrameTime: sorted[Math.floor(sorted.length * 0.95)],
+      p99FrameTime: sorted[Math.floor(sorted.length * 0.99)],
+      maxFrameTime: sorted[sorted.length - 1],
+      longFrames: sorted.filter(t => t > 50).length,
+      avgAlarmLatency: this.alarmLatencies.reduce((a, b) => a + b, 0) / this.alarmLatencies.length,
+      p95AlarmLatency: [...this.alarmLatencies].sort((a, b) => a - b)[Math.floor(this.alarmLatencies.length * 0.95)],
+      heapMB: (performance as any).memory?.usedJSHeapSize / 1024 / 1024,
+      domNodes: document.querySelectorAll('*').length
+    };
+  }
+}
+```
+
+### Alarm Latency Measurement
+
+When processing incoming WebSocket data:
+
+```typescript
+ws.onmessage = (event) => {
+  const receiveTime = performance.now();
+  const readings = JSON.parse(event.data);
+
+  for (const [id, reading] of Object.entries(readings)) {
+    // Check threshold breach
+    if (reading.value > 90 && previousValues.get(id) <= 90) {
+      // This is a NEW alarm — measure latency
+      updateAlarmVisual(id);
+      metrics.recordAlarmLatency(receiveTime);
+    }
+    previousValues.set(id, reading.value);
+  }
+
+  updateAllValues(readings);
+};
+```
+
+---
+
+## 8. Test Environment
+
+### Hardware
+
+Run on the actual target hardware (or equivalent) where the test bench software will be deployed. If not available, use a mid-range machine. Document exact specs:
+
+- CPU model and clock speed
+- RAM
+- GPU (integrated or discrete)
+- OS and version
+- Browser/Electron version
+
+### Browser Settings
+
+- Chrome DevTools closed during measurement (DevTools impacts performance)
+- No other tabs open
+- Hardware acceleration enabled (default)
+- Record one run with DevTools Performance tab open for flame graph analysis (separate from measurement runs)
+
+### Run Protocol
+
+For each scenario × each implementation variant:
+
+1. Open the page, wait 5 seconds for warmup
+2. Start WebSocket connection, begin receiving data
+3. Let it run for 60 seconds
+4. Capture metrics report
+5. Run 3 times, take the median of each metric
+6. Save Chrome Performance profile for one representative run
+
+---
+
+## 9. Project Structure
+
+```
+benchmark/
+├── server/
+│   └── ws-simulator.ts          # WebSocket telemetry simulator
+│
+├── shared/
+│   ├── metrics.ts               # Performance measurement utilities
+│   ├── types.ts                 # Shared TypeScript interfaces
+│   ├── layoutGenerator.ts       # Generate component positions in grid
+│   └── thresholds.ts            # Threshold color logic
+│
+├── svg-renderer/
+│   ├── BenchmarkSVG-A.vue       # Naive reactive
+│   ├── BenchmarkSVG-B.vue       # Direct DOM manipulation
+│   └── BenchmarkSVG-C.vue       # Batched DOM updates
+│
+├── konva-renderer/
+│   ├── BenchmarkKonva-A.vue     # Vue reactive on all layers
+│   ├── BenchmarkKonva-B.vue     # Direct Konva on data layer
+│   └── BenchmarkKonva-C.vue     # Layered + direct + alarm separation
+│
+├── App.vue                      # Scenario selector UI
+├── main.ts
+└── README.md
+```
+
+---
+
+## 10. Expected Outcomes & Decision Matrix
+
+### If SVG-B handles S3 (500 components) at ≥30 FPS with ≤50ms alarm latency:
+
+→ **Use SVG.** The developer experience advantages (DOM inspectability, CSS styling, native browser events, text crispness at zoom, existing Vue tooling) outweigh Canvas benefits. The monitoring pillar can use direct DOM updates bypassing Vue for the hot path.
+
+### If SVG fails at S3 but Canvas-B handles it:
+
+→ **Use Konva for the canvas area.** The layered architecture with direct Konva updates for monitoring provides the safety margin needed. Evaluate whether Configuration pillar authoring should also use Konva (consistency) or SVG (better authoring DX) — the hybrid approach.
+
+### If both fail at S3:
+
+→ Re-evaluate component count assumptions with the control engineer. 500 components with all sensors updating simultaneously at 10 Hz may not reflect reality. Run S5 (partial update) to test the realistic scenario.
+
+### If both pass even at S4 (1000 components):
+
+→ **Use SVG.** Performance is not a differentiator; choose the simpler technology.
+
+---
+
+## 11. What This Benchmark Does NOT Test
+
+These items matter but are separate concerns:
+
+- **Zoom/pan performance** — different test, add later if needed
+- **Authoring interactions** (drag, drop, connect) — not a throughput problem
+- **Electron IPC overhead** — this benchmark uses WebSocket directly; IPC adds a thin layer but is not the bottleneck
+- **Memory over long duration** — run a separate 30-minute soak test for leak detection
+- **Touch/mobile performance** — desktop application, not relevant
+
+---
+
+## 12. Timeline
+
+| Day | Activity |
+|-----|----------|
+| 1 | Build WebSocket simulator + metrics utilities + layout generator |
+| 2 | Build SVG implementations (A, B, C variants) |
+| 3 | Build Konva implementations (A, B, C variants) |
+| 4 | Run all scenarios, collect data, capture profiles |
+| 5 | Analyse results, write findings, make decision |
+
+**Total: 1 week. After this week, the SVG vs Canvas question is answered with data.**
