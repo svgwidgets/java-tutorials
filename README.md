@@ -1,1 +1,1 @@
-https://claude.ai/share/da54a838-61f4-4c15-98f1-e2f0aa7a44c7
+https://chatgpt.com/share/69c4c13e-764c-8330-ba6c-5cc9d3b3c44f
